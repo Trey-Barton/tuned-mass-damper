@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Tuned Mass Damper — Building Stability Simulation</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #0b1020; color: #e6ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #canvas { display: block; width: 100vw; height: 100vh; }
+  #ui {
+    position: absolute; top: 16px; left: 16px; padding: 16px 18px;
+    background: rgba(15, 22, 45, 0.78); border: 1px solid #233; border-radius: 10px;
+    backdrop-filter: blur(6px); max-width: 320px; line-height: 1.4;
+  }
+  #ui h1 { margin: 0 0 6px; font-size: 16px; }
+  #ui p { margin: 4px 0; font-size: 12.5px; color: #aab4d4; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+  .row label { font-size: 12px; width: 110px; color: #cfd6ef; }
+  .row input[type=range] { flex: 1; }
+  .val { font-size: 12px; width: 40px; text-align: right; color: #8fe1ff; }
+  button {
+    background: #2c63ff; color: white; border: 0; padding: 8px 12px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; margin-right: 6px;
+  }
+  button.alt { background: #1a2747; }
+  button:hover { filter: brightness(1.15); }
+  #legend {
+    position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 24px; font-size: 12px; color: #cfd6ef;
+    background: rgba(15,22,45,0.78); padding: 8px 14px; border-radius: 8px;
+    border: 1px solid #233;
+  }
+  #legend span::before {
+    content: ""; display: inline-block; width: 10px; height: 10px;
+    border-radius: 50%; margin-right: 6px; vertical-align: middle;
+  }
+  #legend .no::before { background: #ff5a6e; }
+  #legend .yes::before { background: #4ade80; }
+  .meter { font-size: 11px; color: #8fe1ff; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+
+<div id="ui">
+  <h1>Tuned Mass Damper Simulation</h1>
+  <p>Two identical buildings experience the same ground shaking. The right one has a tuned mass damper (TMD) on top — a heavy pendulum tuned to counter-oscillate against the building's natural sway.</p>
+
+  <div class="row">
+    <label>Quake strength</label>
+    <input id="amp" type="range" min="0" max="1" step="0.01" value="0.5" />
+    <span id="ampV" class="val">0.50</span>
+  </div>
+  <div class="row">
+    <label>Quake frequency</label>
+    <input id="freq" type="range" min="0.3" max="3" step="0.01" value="1.0" />
+    <span id="freqV" class="val">1.00</span>
+  </div>
+  <div class="row">
+    <label>Damper mass</label>
+    <input id="tmdMass" type="range" min="0.01" max="0.2" step="0.005" value="0.05" />
+    <span id="tmdMassV" class="val">0.05</span>
+  </div>
+
+  <div style="margin-top:10px;">
+    <button id="shake">Shake!</button>
+    <button id="impulse" class="alt">Impulse</button>
+    <button id="reset" class="alt">Reset</button>
+  </div>
+  <p class="meter" style="margin-top:8px;">
+    Peak sway — no TMD: <span id="peakA">0.00</span> &nbsp; with TMD: <span id="peakB">0.00</span>
+  </p>
+</div>
+
+<div id="legend">
+  <span class="no">No damper</span>
+  <span class="yes">With tuned mass damper</span>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- scene ----------
+const canvas = document.getElementById('canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+scene.fog = new THREE.Fog(0x0b1020, 40, 120);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+camera.position.set(0, 14, 36);
+camera.lookAt(0, 10, 0);
+
+// lights
+scene.add(new THREE.HemisphereLight(0x9bb6ff, 0x1a1a2a, 0.45));
+const dir = new THREE.DirectionalLight(0xffffff, 1.1);
+dir.position.set(15, 30, 20);
+dir.castShadow = true;
+dir.shadow.mapSize.set(1024, 1024);
+dir.shadow.camera.left = -30; dir.shadow.camera.right = 30;
+dir.shadow.camera.top = 30; dir.shadow.camera.bottom = -10;
+scene.add(dir);
+
+// ground
+const groundGeo = new THREE.PlaneGeometry(200, 200, 40, 40);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x11182c, roughness: 0.95 });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// grid
+const grid = new THREE.GridHelper(200, 80, 0x1e2a55, 0x141c36);
+grid.position.y = 0.01;
+scene.add(grid);
+
+// ---------- buildings ----------
+const FLOORS = 12;
+const FLOOR_H = 1.6;
+const BUILDING_W = 4;
+const BUILDING_D = 4;
+
+function makeBuilding(x, color, withTMD) {
+  const group = new THREE.Group();
+  group.position.x = x;
+
+  // foundation (moves with ground)
+  const foundation = new THREE.Mesh(
+    new THREE.BoxGeometry(BUILDING_W + 1.5, 0.6, BUILDING_D + 1.5),
+    new THREE.MeshStandardMaterial({ color: 0x222a48, roughness: 0.8 })
+  );
+  foundation.position.y = 0.3;
+  foundation.castShadow = foundation.receiveShadow = true;
+  group.add(foundation);
+
+  // floors
+  const floors = [];
+  const floorMat = new THREE.MeshStandardMaterial({
+    color, roughness: 0.55, metalness: 0.1,
+    emissive: new THREE.Color(color).multiplyScalar(0.08)
+  });
+  for (let i = 0; i < FLOORS; i++) {
+    const f = new THREE.Mesh(
+      new THREE.BoxGeometry(BUILDING_W, FLOOR_H * 0.9, BUILDING_D),
+      floorMat
+    );
+    f.castShadow = f.receiveShadow = true;
+    floors.push(f);
+    group.add(f);
+
+    // window strip
+    const strip = new THREE.Mesh(
+      new THREE.BoxGeometry(BUILDING_W + 0.02, 0.3, BUILDING_D + 0.02),
+      new THREE.MeshStandardMaterial({ color: 0xffe58a, emissive: 0xffcc55, emissiveIntensity: 0.7 })
+    );
+    f.add(strip);
+    strip.position.y = 0.15;
+  }
+
+  // TMD: a sphere hanging from a pivot at top
+  let tmd = null, tmdPivot = null, tmdRod = null;
+  if (withTMD) {
+    const roof = new THREE.Mesh(
+      new THREE.BoxGeometry(BUILDING_W + 0.4, 0.3, BUILDING_D + 0.4),
+      new THREE.MeshStandardMaterial({ color: 0x2a3a6a })
+    );
+    roof.castShadow = true;
+    floors[FLOORS - 1].add(roof);
+    roof.position.y = FLOOR_H * 0.55;
+
+    tmdPivot = new THREE.Group();
+    floors[FLOORS - 1].add(tmdPivot);
+    tmdPivot.position.y = FLOOR_H * 0.9;
+
+    tmdRod = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.05, 1.8, 10),
+      new THREE.MeshStandardMaterial({ color: 0xaaaaaa })
+    );
+    tmdRod.position.y = -0.9;
+    tmdPivot.add(tmdRod);
+
+    tmd = new THREE.Mesh(
+      new THREE.SphereGeometry(0.6, 24, 16),
+      new THREE.MeshStandardMaterial({ color: 0xffc857, metalness: 0.4, roughness: 0.3 })
+    );
+    tmd.castShadow = true;
+    tmd.position.y = -1.8;
+    tmdPivot.add(tmd);
+  }
+
+  scene.add(group);
+
+  return { group, foundation, floors, tmd, tmdPivot };
+}
+
+const buildingA = makeBuilding(-7, 0xff5a6e, false);  // no damper
+const buildingB = makeBuilding(7, 0x4ade80, true);    // with damper
+
+// labels (sprites)
+function makeLabel(text, color) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 128;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0)';
+  ctx.fillRect(0,0,512,128);
+  ctx.fillStyle = color;
+  ctx.font = 'bold 64px -apple-system, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 256, 64);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  const s = new THREE.Sprite(mat);
+  s.scale.set(8, 2, 1);
+  return s;
+}
+const labelA = makeLabel('NO DAMPER', '#ff8a99');
+labelA.position.set(-7, FLOORS * FLOOR_H + 3.5, 0);
+scene.add(labelA);
+const labelB = makeLabel('WITH TMD', '#86f5a8');
+labelB.position.set(7, FLOORS * FLOOR_H + 3.5, 0);
+scene.add(labelB);
+
+// ---------- physics ----------
+// Model each building as N stacked lumped masses with linear stiffness between floors.
+// We'll use a simple modal approach: treat the whole building as a single dominant mode:
+// x'' + 2*zeta*w*x' + w^2*(x - x_ground) = 0  for each floor scaled by mode shape.
+// Mode shape: linear with height (approx first mode).
+
+const W_N = 2 * Math.PI * 0.7;   // natural freq (rad/s) ~ 0.7 Hz
+const ZETA = 0.015;              // structural damping ratio (low for visible sway)
+
+// TMD tuned to building: Den Hartog optimal ratio ~ 1/(1+mu)
+// we'll parameterize mu = tmdMass ratio
+function tmdParams(mu) {
+  const fOpt = 1 / (1 + mu);            // frequency ratio
+  const zOpt = Math.sqrt(3 * mu / (8 * (1 + mu) ** 3));  // optimal damping ratio
+  return { w: W_N * fOpt, zeta: zOpt };
+}
+
+const state = {
+  // ground
+  gx: 0, quakeT: 0, quakeActive: false, quakeDur: 0,
+  amp: 0.5, freq: 1.0, mu: 0.05,
+  // building A: top displacement x, velocity v (modal)
+  aX: 0, aV: 0,
+  // building B: top displacement & velocity
+  bX: 0, bV: 0,
+  // TMD: absolute displacement & velocity (we'll compute relative to b for force)
+  tX: 0, tV: 0,
+  peakA: 0, peakB: 0
+};
+
+function stepPhysics(dt) {
+  // ground motion
+  let gAcc = 0;
+  if (state.quakeActive) {
+    state.quakeT += dt;
+    const envelope = Math.min(1, state.quakeT / 0.4) * Math.max(0, 1 - (state.quakeT - state.quakeDur + 1.2) / 1.2);
+    const w = 2 * Math.PI * state.freq;
+    state.gx = state.amp * envelope * Math.sin(w * state.quakeT);
+    gAcc = -state.amp * envelope * w * w * Math.sin(w * state.quakeT);
+    if (state.quakeT > state.quakeDur) {
+      state.quakeActive = false;
+      state.gx = 0;
+    }
+  } else {
+    state.gx *= 0.9;
+  }
+
+  // Building A: SDOF forced by ground acceleration
+  // x'' + 2*zeta*w*x' + w^2*x = -gAcc  (relative to ground)
+  const aAcc = -gAcc - 2 * ZETA * W_N * state.aV - W_N * W_N * state.aX;
+  state.aV += aAcc * dt;
+  state.aX += state.aV * dt;
+
+  // Building B with TMD (2-DOF)
+  const mu = state.mu;
+  const { w: wT, zeta: zT } = tmdParams(mu);
+
+  // TMD relative to building top: y = tX - bX
+  const y = state.tX - state.bX;
+  const yDot = state.tV - state.bV;
+
+  // TMD equation: y'' + 2*zT*wT*yDot + wT^2*y = -bAcc (approx)
+  // Building: bAcc = -gAcc - 2*zeta*w*bV - w^2*bX + mu*(2*zT*wT*yDot + wT^2*y)
+  const bAcc = -gAcc - 2 * ZETA * W_N * state.bV - W_N * W_N * state.bX
+               + mu * (2 * zT * wT * yDot + wT * wT * y);
+  const tAccRel = -bAcc - 2 * zT * wT * yDot - wT * wT * y;
+  const tAcc = tAccRel + bAcc;
+
+  state.bV += bAcc * dt;
+  state.bX += state.bV * dt;
+  state.tV += tAcc * dt;
+  state.tX += state.tV * dt;
+
+  state.peakA = Math.max(state.peakA * 0.999, Math.abs(state.aX));
+  state.peakB = Math.max(state.peakB * 0.999, Math.abs(state.bX));
+}
+
+// ---------- render ----------
+function applySway(b, topDisp) {
+  // move foundation with ground
+  b.foundation.position.x = state.gx;
+  // apply linear mode shape: floor i displacement = topDisp * (i+1)/FLOORS + ground
+  for (let i = 0; i < FLOORS; i++) {
+    const shape = (i + 1) / FLOORS;
+    b.floors[i].position.x = state.gx + topDisp * shape;
+    b.floors[i].position.y = 0.6 + (i + 0.5) * FLOOR_H;
+    // tilt each floor slightly for visual
+    b.floors[i].rotation.z = -topDisp * shape * 0.04;
+  }
+}
+
+function applyTMD(b, tmdDisp) {
+  if (!b.tmdPivot) return;
+  // pendulum angle from horizontal displacement (length ~1.8)
+  const angle = Math.atan2(tmdDisp, 1.8);
+  b.tmdPivot.rotation.z = angle;
+}
+
+const clock = new THREE.Clock();
+function resize() {
+  const w = canvas.clientWidth = window.innerWidth;
+  const h = canvas.clientHeight = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+function tick() {
+  const dt = Math.min(clock.getDelta(), 1 / 30);
+  // sub-step for stability
+  const sub = 4;
+  for (let i = 0; i < sub; i++) stepPhysics(dt / sub);
+
+  applySway(buildingA, state.aX);
+  applySway(buildingB, state.bX);
+  applyTMD(buildingB, state.tX - state.bX);
+
+  document.getElementById('peakA').textContent = state.peakA.toFixed(2);
+  document.getElementById('peakB').textContent = state.peakB.toFixed(2);
+
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+tick();
+
+// ---------- controls ----------
+const $ = id => document.getElementById(id);
+function bind(id, key, fmt = v => v.toFixed(2)) {
+  const el = $(id), out = $(id + 'V');
+  const update = () => { state[key] = parseFloat(el.value); out.textContent = fmt(state[key]); };
+  el.addEventListener('input', update); update();
+}
+bind('amp', 'amp');
+bind('freq', 'freq');
+bind('tmdMass', 'mu', v => v.toFixed(3));
+
+$('shake').addEventListener('click', () => {
+  state.quakeActive = true; state.quakeT = 0; state.quakeDur = 6;
+  state.peakA = 0; state.peakB = 0;
+});
+$('impulse').addEventListener('click', () => {
+  state.aV += 4; state.bV += 4;
+});
+$('reset').addEventListener('click', () => {
+  state.aX = state.aV = state.bX = state.bV = state.tX = state.tV = 0;
+  state.gx = 0; state.quakeActive = false; state.peakA = state.peakB = 0;
+});
+
+// subtle camera orbit
+let camAngle = 0;
+setInterval(() => {
+  camAngle += 0.0015;
+  camera.position.x = Math.sin(camAngle) * 6;
+  camera.position.z = 36 + Math.cos(camAngle) * 2;
+  camera.lookAt(0, 10, 0);
+}, 16);
+</script>
+</body>
+</html>
