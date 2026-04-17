@@ -7,9 +7,10 @@
   html, body { margin: 0; padding: 0; height: 100%; background: #0b1020; color: #e6ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
   #canvas { display: block; width: 100vw; height: 100vh; }
   #ui {
-    position: absolute; top: 16px; left: 16px; padding: 16px 18px;
-    background: rgba(15, 22, 45, 0.78); border: 1px solid #233; border-radius: 10px;
-    backdrop-filter: blur(6px); max-width: 320px; line-height: 1.4;
+    position: absolute; top: 16px; left: 16px; padding: 14px 16px;
+    background: rgba(15, 22, 45, 0.82); border: 1px solid #233; border-radius: 10px;
+    backdrop-filter: blur(6px); width: 300px; line-height: 1.35;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   }
   #ui h1 { margin: 0 0 6px; font-size: 16px; }
   #ui p { margin: 4px 0; font-size: 12.5px; color: #aab4d4; }
@@ -96,9 +97,9 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b1020);
 scene.fog = new THREE.Fog(0x0b1020, 40, 120);
 
-const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
-camera.position.set(0, 14, 36);
-camera.lookAt(0, 10, 0);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+camera.position.set(3, 13, 58);
+camera.lookAt(3, 11, 0);
 
 // lights
 scene.add(new THREE.HemisphereLight(0x9bb6ff, 0x1a1a2a, 0.45));
@@ -124,76 +125,142 @@ grid.position.y = 0.01;
 scene.add(grid);
 
 // ---------- buildings ----------
-const FLOORS = 12;
-const FLOOR_H = 1.6;
-const BUILDING_W = 4;
-const BUILDING_D = 4;
+const FLOORS = 18;
+const FLOOR_H = 1.2;
+const BUILDING_W = 2.6;
+const BUILDING_D = 2.6;
 
-function makeBuilding(x, color, withTMD) {
+// pre-built window facade texture (shared by both buildings)
+function makeFacadeTexture() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  // base wall color
+  ctx.fillStyle = '#1a2030';
+  ctx.fillRect(0, 0, 256, 256);
+  // window grid
+  const cols = 6, rows = 8;
+  const pad = 6;
+  const winW = (256 - pad * (cols + 1)) / cols;
+  const winH = (256 - pad * (rows + 1)) / rows;
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      const lit = Math.random() < 0.7;
+      const shade = lit ? 200 + Math.floor(Math.random() * 55) : 40 + Math.floor(Math.random() * 30);
+      const tint = lit ? `rgb(${shade}, ${shade - 10}, ${Math.floor(shade * 0.6)})`
+                       : `rgb(${shade}, ${shade + 5}, ${shade + 15})`;
+      ctx.fillStyle = tint;
+      ctx.fillRect(pad + col * (winW + pad), pad + r * (winH + pad), winW, winH);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+const SHARED_FACADE = makeFacadeTexture();
+
+function makeBuilding(x, tintColor, withTMD) {
   const group = new THREE.Group();
   group.position.x = x;
 
-  // foundation (moves with ground)
+  // plaza / base pad (moves with ground)
   const foundation = new THREE.Mesh(
-    new THREE.BoxGeometry(BUILDING_W + 1.5, 0.6, BUILDING_D + 1.5),
-    new THREE.MeshStandardMaterial({ color: 0x222a48, roughness: 0.8 })
+    new THREE.BoxGeometry(BUILDING_W + 2.5, 0.3, BUILDING_D + 2.5),
+    new THREE.MeshStandardMaterial({ color: 0x2a3454, roughness: 0.9 })
   );
-  foundation.position.y = 0.3;
+  foundation.position.y = 0.15;
   foundation.castShadow = foundation.receiveShadow = true;
   group.add(foundation);
 
-  // floors
+  // floors — each is a slim slab with window facade texture
   const floors = [];
-  const floorMat = new THREE.MeshStandardMaterial({
-    color, roughness: 0.55, metalness: 0.1,
-    emissive: new THREE.Color(color).multiplyScalar(0.08)
+  const facadeTex = SHARED_FACADE.clone();
+  facadeTex.needsUpdate = true;
+  facadeTex.repeat.set(1, 1);
+
+  const wallMat = new THREE.MeshStandardMaterial({
+    map: facadeTex,
+    color: tintColor,
+    roughness: 0.4,
+    metalness: 0.25,
+    emissive: new THREE.Color(tintColor).multiplyScalar(0.05),
   });
+
   for (let i = 0; i < FLOORS; i++) {
     const f = new THREE.Mesh(
-      new THREE.BoxGeometry(BUILDING_W, FLOOR_H * 0.9, BUILDING_D),
-      floorMat
+      new THREE.BoxGeometry(BUILDING_W, FLOOR_H, BUILDING_D),
+      wallMat
     );
     f.castShadow = f.receiveShadow = true;
     floors.push(f);
     group.add(f);
 
-    // window strip
-    const strip = new THREE.Mesh(
-      new THREE.BoxGeometry(BUILDING_W + 0.02, 0.3, BUILDING_D + 0.02),
-      new THREE.MeshStandardMaterial({ color: 0xffe58a, emissive: 0xffcc55, emissiveIntensity: 0.7 })
-    );
-    f.add(strip);
-    strip.position.y = 0.15;
+    // thin dark slab between floors (structural line)
+    if (i < FLOORS - 1) {
+      const band = new THREE.Mesh(
+        new THREE.BoxGeometry(BUILDING_W + 0.04, 0.06, BUILDING_D + 0.04),
+        new THREE.MeshStandardMaterial({ color: 0x0b0f1e, roughness: 0.9 })
+      );
+      band.position.y = FLOOR_H * 0.5;
+      f.add(band);
+    }
   }
 
-  // TMD: a sphere hanging from a pivot at top
-  let tmd = null, tmdPivot = null, tmdRod = null;
-  if (withTMD) {
-    const roof = new THREE.Mesh(
-      new THREE.BoxGeometry(BUILDING_W + 0.4, 0.3, BUILDING_D + 0.4),
-      new THREE.MeshStandardMaterial({ color: 0x2a3a6a })
-    );
-    roof.castShadow = true;
-    floors[FLOORS - 1].add(roof);
-    roof.position.y = FLOOR_H * 0.55;
+  // crown / roof cap
+  const crown = new THREE.Mesh(
+    new THREE.BoxGeometry(BUILDING_W + 0.3, 0.4, BUILDING_D + 0.3),
+    new THREE.MeshStandardMaterial({ color: 0x141a2e, roughness: 0.8 })
+  );
+  crown.position.y = FLOOR_H * 0.5 + 0.2;
+  crown.castShadow = true;
+  floors[FLOORS - 1].add(crown);
 
+  // antenna spire (only on the no-TMD building for visual distinction)
+  let tmd = null, tmdPivot = null, tmdRod = null;
+  if (!withTMD) {
+    const spire = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.08, 2.2, 8),
+      new THREE.MeshStandardMaterial({ color: 0x889, metalness: 0.6, roughness: 0.3 })
+    );
+    spire.position.y = FLOOR_H * 0.5 + 0.4 + 1.1;
+    spire.castShadow = true;
+    floors[FLOORS - 1].add(spire);
+  }
+
+  // TMD: a heavy sphere hanging from a pivot at top
+  if (withTMD) {
+    // glass enclosure for the damper (visual)
+    const enclosure = new THREE.Mesh(
+      new THREE.BoxGeometry(BUILDING_W - 0.2, 2.2, BUILDING_D - 0.2),
+      new THREE.MeshPhysicalMaterial({
+        color: 0x88ccff, transparent: true, opacity: 0.18,
+        roughness: 0.1, metalness: 0.0, transmission: 0.7
+      })
+    );
+    enclosure.position.y = FLOOR_H * 0.5 + 0.4 + 1.1;
+    floors[FLOORS - 1].add(enclosure);
+
+    // pivot point just under the roof cap
     tmdPivot = new THREE.Group();
     floors[FLOORS - 1].add(tmdPivot);
-    tmdPivot.position.y = FLOOR_H * 0.9;
+    tmdPivot.position.y = FLOOR_H * 0.5 + 0.4 + 2.0;
 
     tmdRod = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.05, 0.05, 1.8, 10),
-      new THREE.MeshStandardMaterial({ color: 0xaaaaaa })
+      new THREE.CylinderGeometry(0.04, 0.04, 1.6, 10),
+      new THREE.MeshStandardMaterial({ color: 0x99a3b8, metalness: 0.7, roughness: 0.3 })
     );
-    tmdRod.position.y = -0.9;
+    tmdRod.position.y = -0.8;
     tmdPivot.add(tmdRod);
 
     tmd = new THREE.Mesh(
-      new THREE.SphereGeometry(0.6, 24, 16),
-      new THREE.MeshStandardMaterial({ color: 0xffc857, metalness: 0.4, roughness: 0.3 })
+      new THREE.SphereGeometry(0.55, 28, 20),
+      new THREE.MeshStandardMaterial({
+        color: 0xffc857, metalness: 0.75, roughness: 0.25,
+        emissive: 0x442200, emissiveIntensity: 0.2
+      })
     );
     tmd.castShadow = true;
-    tmd.position.y = -1.8;
+    tmd.position.y = -1.6;
     tmdPivot.add(tmd);
   }
 
@@ -202,8 +269,8 @@ function makeBuilding(x, color, withTMD) {
   return { group, foundation, floors, tmd, tmdPivot };
 }
 
-const buildingA = makeBuilding(-7, 0xff5a6e, false);  // no damper
-const buildingB = makeBuilding(7, 0x4ade80, true);    // with damper
+const buildingA = makeBuilding(-8, 0xc9d4ec, false);  // no damper
+const buildingB = makeBuilding(8, 0xc9d4ec, true);    // with damper
 
 // labels (sprites)
 function makeLabel(text, color) {
@@ -223,10 +290,12 @@ function makeLabel(text, color) {
   return s;
 }
 const labelA = makeLabel('NO DAMPER', '#ff8a99');
-labelA.position.set(-7, FLOORS * FLOOR_H + 3.5, 0);
+labelA.position.set(-8, FLOORS * FLOOR_H + 5.5, 0);
+labelA.scale.set(6, 1.5, 1);
 scene.add(labelA);
 const labelB = makeLabel('WITH TMD', '#86f5a8');
-labelB.position.set(7, FLOORS * FLOOR_H + 3.5, 0);
+labelB.position.set(8, FLOORS * FLOOR_H + 5.5, 0);
+labelB.scale.set(6, 1.5, 1);
 scene.add(labelB);
 
 // ---------- physics ----------
@@ -314,7 +383,7 @@ function applySway(b, topDisp) {
   for (let i = 0; i < FLOORS; i++) {
     const shape = (i + 1) / FLOORS;
     b.floors[i].position.x = state.gx + topDisp * shape;
-    b.floors[i].position.y = 0.6 + (i + 0.5) * FLOOR_H;
+    b.floors[i].position.y = 0.3 + (i + 0.5) * FLOOR_H;
     // tilt each floor slightly for visual
     b.floors[i].rotation.z = -topDisp * shape * 0.04;
   }
@@ -383,9 +452,9 @@ $('reset').addEventListener('click', () => {
 let camAngle = 0;
 setInterval(() => {
   camAngle += 0.0015;
-  camera.position.x = Math.sin(camAngle) * 6;
-  camera.position.z = 36 + Math.cos(camAngle) * 2;
-  camera.lookAt(0, 10, 0);
+  camera.position.x = 3 + Math.sin(camAngle) * 4;
+  camera.position.z = 58 + Math.cos(camAngle) * 2;
+  camera.lookAt(3, 11, 0);
 }, 16);
 </script>
 </body>
