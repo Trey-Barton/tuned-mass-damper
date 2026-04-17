@@ -87,7 +87,6 @@
 </script>
 <script type="module">
 import * as THREE from 'three';
-import { Sky } from 'three/addons/objects/Sky.js';
 
 // ---------- scene ----------
 const canvas = document.getElementById('canvas');
@@ -95,65 +94,230 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 0.75;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(0xbcd4e8, 180, 440);
+scene.fog = null;
 
 const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
 camera.position.set(3, 13, 58);
 camera.lookAt(3, 11, 0);
 
-// ---------- sunny sky ----------
-const sky = new Sky();
-sky.scale.setScalar(10000);
-scene.add(sky);
-const skyU = sky.material.uniforms;
-skyU['turbidity'].value = 2.5;
-skyU['rayleigh'].value = 2.8;
-skyU['mieCoefficient'].value = 0.003;
-skyU['mieDirectionalG'].value = 0.85;
+// ---------- cartoon sky + painted skyline backdrop ----------
+function drawCloud(ctx, x, y, scale) {
+  ctx.fillStyle = '#ffffff';
+  const puff = (dx, dy, r) => { ctx.beginPath(); ctx.arc(x + dx * scale, y + dy * scale, r * scale, 0, Math.PI * 2); ctx.fill(); };
+  puff(-40, 0, 24);
+  puff(-15, -14, 28);
+  puff(15, -8, 30);
+  puff(38, 2, 24);
+  puff(10, 10, 26);
+  puff(-18, 8, 25);
+  // soft shadow
+  ctx.fillStyle = 'rgba(180,210,230,0.28)';
+  ctx.beginPath();
+  ctx.ellipse(x, y + 14 * scale, 52 * scale, 6 * scale, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
 
-const sunPos = new THREE.Vector3();
-const sunPhi = THREE.MathUtils.degToRad(55);      // elevation from zenith
-const sunTheta = THREE.MathUtils.degToRad(130);   // azimuth
-sunPos.setFromSphericalCoords(1, sunPhi, sunTheta);
-skyU['sunPosition'].value.copy(sunPos);
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
 
-// build environment map from the sky for reflections
-const pmrem = new THREE.PMREMGenerator(renderer);
-scene.environment = pmrem.fromScene(sky, 0.04).texture;
+function paintCartoonSkyline(ctx, W, H) {
+  // skyline occupies bottom ~45% of backdrop
+  const horizon = H * 0.62;
 
-// ---------- lights ----------
-scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x8a7a5c, 0.55));
-const dir = new THREE.DirectionalLight(0xfff4e0, 2.2);
-dir.position.set(sunPos.x * 50, sunPos.y * 50, sunPos.z * 50);
+  // building palette
+  const palette = [
+    { body: '#2a6ea8', glass: '#3a8ccb', trim: '#1c4f7c', type: 'glass' },
+    { body: '#b8805a', glass: '#d6a478', trim: '#8a5a3c', type: 'brick' },
+    { body: '#e6e2d6', glass: '#cfcabd', trim: '#a8a497', type: 'cream' },
+    { body: '#264f78', glass: '#3d74a7', trim: '#1a3954', type: 'glass' },
+    { body: '#c7c2b4', glass: '#9e9a8e', trim: '#857f72', type: 'cream' },
+    { body: '#a56a48', glass: '#c98a62', trim: '#7a4a30', type: 'brick' },
+    { body: '#3a85bc', glass: '#5aa8db', trim: '#235a84', type: 'glass' },
+  ];
+
+  // draw buildings left-to-right with a gentle bell-curve height (tallest mid)
+  let x = 0;
+  let i = 0;
+  while (x < W) {
+    const p = palette[i % palette.length];
+    const w = 90 + Math.floor(Math.random() * 120);
+    // height distribution — tallest toward center of image
+    const centerBias = 1 - Math.abs((x + w / 2) / W - 0.5) * 1.4;
+    const h = 180 + Math.random() * 280 + Math.max(0, centerBias) * 180;
+    const top = horizon - h;
+
+    // body
+    ctx.fillStyle = p.body;
+    ctx.fillRect(x, top, w, h);
+
+    // subtle shaded right side
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    ctx.fillRect(x + w - Math.floor(w * 0.22), top, Math.floor(w * 0.22), h);
+
+    // windows
+    if (p.type === 'glass') {
+      // big vertical window bands
+      const cols = 4 + Math.floor(Math.random() * 4);
+      const bandW = (w - 16) / cols;
+      for (let c = 0; c < cols; c++) {
+        ctx.fillStyle = p.glass;
+        const bx = x + 8 + c * bandW;
+        ctx.fillRect(bx, top + 16, bandW - 4, h - 32);
+        // darker horizontal lines
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        for (let yy = top + 28; yy < top + h - 18; yy += 12) {
+          ctx.fillRect(bx + 2, yy, bandW - 8, 1);
+        }
+      }
+    } else if (p.type === 'brick') {
+      // small square windows in a grid
+      const cols = 4 + Math.floor(Math.random() * 3);
+      const rows = Math.floor((h - 30) / 22);
+      const cellW = (w - 24) / cols;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          ctx.fillStyle = Math.random() < 0.18 ? '#ffe7a6' : p.glass;
+          ctx.fillRect(x + 12 + c * cellW + 2, top + 20 + r * 22, cellW - 6, 14);
+        }
+      }
+    } else {
+      // cream: neat grid windows
+      const cols = 5 + Math.floor(Math.random() * 3);
+      const rows = Math.floor((h - 30) / 20);
+      const cellW = (w - 20) / cols;
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          ctx.fillStyle = Math.random() < 0.15 ? '#ffe7a6' : p.glass;
+          ctx.fillRect(x + 10 + c * cellW + 2, top + 18 + r * 20, cellW - 6, 12);
+        }
+      }
+    }
+
+    // rooftop — occasionally a sloped top, spire, or water tank
+    const rooftop = Math.random();
+    if (rooftop < 0.3) {
+      // spire / antenna
+      ctx.fillStyle = p.trim;
+      ctx.fillRect(x + w / 2 - 3, top - 26, 6, 26);
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2 - 10, top); ctx.lineTo(x + w / 2 + 10, top);
+      ctx.lineTo(x + w / 2 + 6, top - 10); ctx.lineTo(x + w / 2 - 6, top - 10);
+      ctx.closePath(); ctx.fill();
+    } else if (rooftop < 0.55) {
+      // angled top (triangle cap)
+      ctx.fillStyle = p.trim;
+      ctx.beginPath();
+      ctx.moveTo(x, top); ctx.lineTo(x + w, top); ctx.lineTo(x + w * 0.55, top - 22);
+      ctx.closePath(); ctx.fill();
+    } else {
+      // flat cap trim
+      ctx.fillStyle = p.trim;
+      ctx.fillRect(x, top - 6, w, 6);
+    }
+
+    x += w + (Math.random() < 0.25 ? 4 : 0);
+    i++;
+  }
+}
+
+function makeBackdropTexture() {
+  const c = document.createElement('canvas');
+  c.width = 4096; c.height = 1024;
+  const ctx = c.getContext('2d');
+
+  // sky gradient — bright cartoon blue top to pale near horizon
+  const sky = ctx.createLinearGradient(0, 0, 0, c.height * 0.75);
+  sky.addColorStop(0, '#3fb0f4');
+  sky.addColorStop(0.45, '#7ec7f5');
+  sky.addColorStop(1, '#cfe7f6');
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, c.width, c.height);
+
+  // sun — bright flat disk with soft halo
+  const sunX = c.width * 0.78, sunY = c.height * 0.22;
+  const halo = ctx.createRadialGradient(sunX, sunY, 20, sunX, sunY, 220);
+  halo.addColorStop(0, 'rgba(255,245,200,0.9)');
+  halo.addColorStop(1, 'rgba(255,245,200,0)');
+  ctx.fillStyle = halo;
+  ctx.fillRect(sunX - 230, sunY - 230, 460, 460);
+  ctx.fillStyle = '#fff4b8';
+  ctx.beginPath();
+  ctx.arc(sunX, sunY, 70, 0, Math.PI * 2);
+  ctx.fill();
+
+  // puffy clouds
+  const clouds = [
+    [600, 170, 1.1], [1400, 120, 1.3], [2200, 200, 1.0],
+    [3100, 140, 1.2], [300, 280, 0.8], [1900, 340, 0.9], [3500, 300, 1.0]
+  ];
+  clouds.forEach(([cx, cy, s]) => drawCloud(ctx, cx, cy, s));
+
+  // skyline (draw twice so the texture tiles seamlessly around the cylinder)
+  paintCartoonSkyline(ctx, c.width, c.height);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+(function addBackdrop() {
+  const tex = makeBackdropTexture();
+  // full cylinder — seamless wrap around the scene
+  const geom = new THREE.CylinderGeometry(260, 260, 140, 96, 1, true);
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, side: THREE.BackSide, depthWrite: false, fog: false,
+    toneMapped: false,
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.y = 50;
+  mesh.rotation.y = Math.PI;
+  scene.add(mesh);
+})();
+
+// flat cartoon dome above (covers what's above the cylinder)
+scene.background = new THREE.Color(0x3fb0f4);
+
+// ---------- lights (flatter, less PBR for cartoon feel) ----------
+scene.add(new THREE.HemisphereLight(0xffffff, 0x9ab5a0, 0.85));
+const dir = new THREE.DirectionalLight(0xfff6d5, 1.4);
+dir.position.set(-30, 50, 25);
 dir.castShadow = true;
-dir.shadow.mapSize.set(2048, 2048);
-dir.shadow.camera.left = -60; dir.shadow.camera.right = 60;
-dir.shadow.camera.top = 60; dir.shadow.camera.bottom = -10;
-dir.shadow.camera.near = 10; dir.shadow.camera.far = 200;
+dir.shadow.mapSize.set(1536, 1536);
+dir.shadow.camera.left = -30; dir.shadow.camera.right = 30;
+dir.shadow.camera.top = 40; dir.shadow.camera.bottom = -10;
+dir.shadow.camera.near = 10; dir.shadow.camera.far = 160;
 dir.shadow.bias = -0.0005;
 scene.add(dir);
 
-// ---------- ground (street/plaza) ----------
+// ---------- ground (flat asphalt) ----------
 const groundGeo = new THREE.PlaneGeometry(600, 600);
-const groundMat = new THREE.MeshStandardMaterial({ color: 0x474a55, roughness: 0.95, metalness: 0.0 });
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x5b616c, roughness: 1.0, metalness: 0.0 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-// lane markings (just a visual flourish)
+// lane markings
 for (let i = -1; i <= 1; i += 2) {
   const stripe = new THREE.Mesh(
     new THREE.PlaneGeometry(0.3, 200),
-    new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.8 })
+    new THREE.MeshStandardMaterial({ color: 0xe9e9e9, roughness: 0.9 })
   );
   stripe.rotation.x = -Math.PI / 2;
   stripe.position.set(i * 14, 0.02, 0);
-  ground.add(new THREE.Object3D()); // spacer, ignore
   scene.add(stripe);
 }
 
@@ -364,59 +528,6 @@ function makeCityFacadeTexture(seed) {
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   return tex;
 }
-
-// painted skyline texture for a distant backdrop (no 3D buildings crowding the scene)
-function makeSkylineTexture() {
-  const c = document.createElement('canvas');
-  c.width = 4096; c.height = 1024;
-  const ctx = c.getContext('2d');
-  ctx.clearRect(0, 0, c.width, c.height);
-
-  // far back layer — pale silhouettes
-  function layer(baseY, tint, alpha, minH, maxH, minW, maxW) {
-    let x = 0;
-    while (x < c.width) {
-      const w = minW + Math.random() * (maxW - minW);
-      const h = minH + Math.random() * (maxH - minH);
-      ctx.fillStyle = `rgba(${tint[0]}, ${tint[1]}, ${tint[2]}, ${alpha})`;
-      ctx.fillRect(x, baseY - h, w, h);
-
-      // tiny window dots for closer layers
-      if (alpha > 0.75) {
-        ctx.fillStyle = 'rgba(255, 230, 150, 0.45)';
-        for (let wy = baseY - h + 10; wy < baseY - 8; wy += 10) {
-          for (let wx = x + 4; wx < x + w - 4; wx += 8) {
-            if (Math.random() < 0.35) ctx.fillRect(wx, wy, 2.5, 2.5);
-          }
-        }
-      }
-      x += w + 1;
-    }
-  }
-  // 3 depth layers from far (light) to near (dark)
-  layer(1024, [170, 188, 210], 0.55, 140, 260, 40, 110);
-  layer(1024, [110, 135, 165], 0.78, 180, 360, 40, 120);
-  layer(1024, [70, 90, 120], 0.95, 220, 480, 50, 140);
-
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.minFilter = THREE.LinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-  return tex;
-}
-
-// curved backdrop so the skyline wraps behind the heroes
-(function addSkyline() {
-  const tex = makeSkylineTexture();
-  const geom = new THREE.CylinderGeometry(220, 220, 110, 64, 1, true, -Math.PI * 0.7, Math.PI * 1.4);
-  const mat = new THREE.MeshBasicMaterial({
-    map: tex, transparent: true, depthWrite: false, side: THREE.BackSide, fog: true,
-  });
-  const mesh = new THREE.Mesh(geom, mat);
-  mesh.position.y = 55;
-  mesh.rotation.y = Math.PI; // face camera
-  scene.add(mesh);
-})();
 
 // ---------- street-level details: road, crosswalk, trees, people ----------
 const _boxGeo = new THREE.BoxGeometry(1, 1, 1);
