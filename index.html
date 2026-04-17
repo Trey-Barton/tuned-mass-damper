@@ -333,7 +333,7 @@ function makeBuilding(x, facadeTex, withTMD) {
 const buildingA = makeBuilding(-8, FACADE_A, false);  // no damper
 const buildingB = makeBuilding(8, FACADE_B, true);    // with damper
 
-// ---------- surrounding cityscape ----------
+// ---------- static skyline backdrop + street-level details ----------
 function makeCityFacadeTexture(seed) {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 256;
@@ -365,135 +365,151 @@ function makeCityFacadeTexture(seed) {
   return tex;
 }
 
-function makeCityscape() {
-  const cityGroup = new THREE.Group();
-  scene.add(cityGroup);
+// painted skyline texture for a distant backdrop (no 3D buildings crowding the scene)
+function makeSkylineTexture() {
+  const c = document.createElement('canvas');
+  c.width = 4096; c.height = 1024;
+  const ctx = c.getContext('2d');
+  ctx.clearRect(0, 0, c.width, c.height);
 
-  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
-  // palette of shared materials — each with a different facade texture
-  const materials = Array.from({ length: 10 }, (_, i) => {
-    const tex = makeCityFacadeTexture(i + 3);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    return new THREE.MeshStandardMaterial({
-      map: tex,
-      roughness: 0.55 + (i % 3) * 0.12,
-      metalness: 0.18 + (i % 4) * 0.08,
-    });
-  });
-  // roof material shared
-  const roofMat = new THREE.MeshStandardMaterial({ color: 0x2c3040, roughness: 0.9 });
+  // far back layer — pale silhouettes
+  function layer(baseY, tint, alpha, minH, maxH, minW, maxW) {
+    let x = 0;
+    while (x < c.width) {
+      const w = minW + Math.random() * (maxW - minW);
+      const h = minH + Math.random() * (maxH - minH);
+      ctx.fillStyle = `rgba(${tint[0]}, ${tint[1]}, ${tint[2]}, ${alpha})`;
+      ctx.fillRect(x, baseY - h, w, h);
 
-  // street grid parameters
-  const BLOCK = 9;         // lot size (building ~7 wide + street)
-  const STREET = 2.2;      // street width between blocks
-  const STEP = BLOCK + STREET;
-  const EXTENT = 160;      // half-width of city area
-  const heroClearX = 14, heroClearZ = 12;
-
-  // distance-based height falloff — near the center a bit shorter to let heroes dominate
-  const centerFalloff = (x, z) => {
-    const d = Math.hypot(x, z);
-    if (d < 22) return 0.4;
-    if (d < 50) return 0.75;
-    if (d < 90) return 1.0;
-    return 0.85;
-  };
-
-  // skyscraper clusters — a couple of denser downtown areas
-  const clusters = [
-    { x: -70, z: -80, r: 35 },
-    { x: 80, z: 40, r: 30 },
-    { x: -40, z: 70, r: 25 },
-  ];
-  const clusterBoost = (x, z) => {
-    let b = 0;
-    for (const c of clusters) {
-      const d = Math.hypot(x - c.x, z - c.z);
-      if (d < c.r) b = Math.max(b, 1 - d / c.r);
-    }
-    return b;
-  };
-
-  // pseudo-random per-lot (stable across reloads)
-  const hash = (i, j) => {
-    const s = Math.sin(i * 127.1 + j * 311.7) * 43758.5453;
-    return s - Math.floor(s);
-  };
-
-  let count = 0;
-  for (let ix = -Math.floor(EXTENT / STEP); ix <= Math.floor(EXTENT / STEP); ix++) {
-    for (let iz = -Math.floor(EXTENT / STEP); iz <= Math.floor(EXTENT / STEP); iz++) {
-      const cx = ix * STEP;
-      const cz = iz * STEP;
-
-      // skip the hero zone and the road running through
-      if (Math.abs(cx) < heroClearX && Math.abs(cz) < heroClearZ) continue;
-
-      // optionally split a lot into 2 narrower buildings
-      const split = hash(ix, iz) < 0.35;
-      const lots = split
-        ? [
-            { ox: -BLOCK * 0.24, oz: 0, w: BLOCK * 0.44, d: BLOCK * 0.9 },
-            { ox:  BLOCK * 0.24, oz: 0, w: BLOCK * 0.44, d: BLOCK * 0.9 },
-          ]
-        : [
-            { ox: 0, oz: 0, w: BLOCK * 0.9, d: BLOCK * 0.9 },
-          ];
-
-      for (const lot of lots) {
-        const lx = cx + lot.ox;
-        const lz = cz + lot.oz;
-        // still enforce hero clearance per-lot
-        if (Math.abs(lx) < heroClearX && Math.abs(lz) < heroClearZ) continue;
-
-        const r1 = hash(ix * 2 + (lot.ox > 0 ? 1 : 0), iz * 2 + (lot.oz > 0 ? 1 : 0));
-        const r2 = hash(ix * 13 + 7, iz * 7 + 3);
-        const r3 = hash(ix + 100, iz + 200);
-
-        // base height in meters
-        const boost = clusterBoost(lx, lz);
-        const fall = centerFalloff(lx, lz);
-        const base = 5 + Math.pow(r1, 1.8) * 18;          // most are 5-20m
-        const tall = r2 < 0.12 ? r2 * 300 : 0;            // occasional 0-36m tall
-        const sky  = (r3 < 0.05 ? 30 + r3 * 600 : 0);      // rare skyscraper 30-60m
-        let h = (base + tall + sky) * fall + boost * 35;
-        h = Math.max(4, Math.min(h, 70));
-
-        // slight w/d jitter so lots don't look stamped
-        const w = lot.w * (0.85 + r1 * 0.25);
-        const d = lot.d * (0.85 + r2 * 0.25);
-
-        const mat = materials[Math.floor(r1 * materials.length)];
-        const m = new THREE.Mesh(boxGeo, mat);
-        m.scale.set(w, h, d);
-        m.position.set(lx, h / 2, lz);
-        m.castShadow = true;
-        m.receiveShadow = true;
-        cityGroup.add(m);
-
-        // thin roof trim (flush with top)
-        const roof = new THREE.Mesh(boxGeo, roofMat);
-        roof.scale.set(w * 1.02, 0.25, d * 1.02);
-        roof.position.set(lx, h + 0.12, lz);
-        cityGroup.add(roof);
-
-        // occasional rooftop HVAC/antenna
-        if (r3 < 0.25 && h > 12) {
-          const hvac = new THREE.Mesh(boxGeo, roofMat);
-          const hw = w * (0.18 + r1 * 0.2);
-          const hd = d * (0.18 + r2 * 0.2);
-          const hh = 0.6 + r3 * 2.2;
-          hvac.scale.set(hw, hh, hd);
-          hvac.position.set(lx + (r1 - 0.5) * w * 0.3, h + hh / 2 + 0.25, lz + (r2 - 0.5) * d * 0.3);
-          cityGroup.add(hvac);
+      // tiny window dots for closer layers
+      if (alpha > 0.75) {
+        ctx.fillStyle = 'rgba(255, 230, 150, 0.45)';
+        for (let wy = baseY - h + 10; wy < baseY - 8; wy += 10) {
+          for (let wx = x + 4; wx < x + w - 4; wx += 8) {
+            if (Math.random() < 0.35) ctx.fillRect(wx, wy, 2.5, 2.5);
+          }
         }
-        count++;
       }
+      x += w + 1;
     }
   }
-  return count;
+  // 3 depth layers from far (light) to near (dark)
+  layer(1024, [170, 188, 210], 0.55, 140, 260, 40, 110);
+  layer(1024, [110, 135, 165], 0.78, 180, 360, 40, 120);
+  layer(1024, [70, 90, 120], 0.95, 220, 480, 50, 140);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  return tex;
 }
-const cityCount = makeCityscape();
+
+// curved backdrop so the skyline wraps behind the heroes
+(function addSkyline() {
+  const tex = makeSkylineTexture();
+  const geom = new THREE.CylinderGeometry(220, 220, 110, 64, 1, true, -Math.PI * 0.7, Math.PI * 1.4);
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, transparent: true, depthWrite: false, side: THREE.BackSide, fog: true,
+  });
+  const mesh = new THREE.Mesh(geom, mat);
+  mesh.position.y = 55;
+  mesh.rotation.y = Math.PI; // face camera
+  scene.add(mesh);
+})();
+
+// ---------- street-level details: road, crosswalk, trees, people ----------
+const _boxGeo = new THREE.BoxGeometry(1, 1, 1);
+const _cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
+const _sphereGeo = new THREE.SphereGeometry(1, 12, 10);
+
+// sidewalk pads in front of each hero building
+const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x8a8f99, roughness: 0.95 });
+[-8, 8].forEach(bx => {
+  const sw = new THREE.Mesh(_boxGeo, sidewalkMat);
+  sw.scale.set(8, 0.15, 8);
+  sw.position.set(bx, 0.075, 0);
+  sw.receiveShadow = true;
+  scene.add(sw);
+});
+
+// crosswalk stripes across the road (between the two buildings)
+const stripeMat = new THREE.MeshStandardMaterial({ color: 0xe9e9e9, roughness: 0.8 });
+for (let i = 0; i < 5; i++) {
+  const st = new THREE.Mesh(_boxGeo, stripeMat);
+  st.scale.set(0.6, 0.04, 3.5);
+  st.position.set(-2.4 + i * 1.2, 0.04, 6);
+  scene.add(st);
+}
+
+// trees scattered along the sides of the scene (not between buildings)
+function addTree(x, z, scale = 1) {
+  const trunk = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.15, 0.22, 1.8 * scale, 8),
+    new THREE.MeshStandardMaterial({ color: 0x5a3a1c, roughness: 0.95 })
+  );
+  trunk.position.set(x, 0.9 * scale, z);
+  trunk.castShadow = true;
+  scene.add(trunk);
+
+  const leafMat = new THREE.MeshStandardMaterial({ color: 0x3e7a3a, roughness: 0.8 });
+  for (let i = 0; i < 3; i++) {
+    const blob = new THREE.Mesh(_sphereGeo, leafMat);
+    const s = (0.8 + Math.random() * 0.5) * scale;
+    blob.scale.set(s, s * 0.9, s);
+    blob.position.set(
+      x + (Math.random() - 0.5) * 0.5,
+      (1.8 + i * 0.4) * scale,
+      z + (Math.random() - 0.5) * 0.5
+    );
+    blob.castShadow = true;
+    scene.add(blob);
+  }
+}
+// rows of trees flanking the scene
+for (let i = -4; i <= 4; i++) {
+  if (Math.abs(i) < 1) continue;
+  const jitter = () => (Math.random() - 0.5) * 0.6;
+  addTree(-14 + jitter(), i * 3.5 + jitter(), 0.9 + Math.random() * 0.3);
+  addTree(14 + jitter(), i * 3.5 + jitter(), 0.9 + Math.random() * 0.3);
+}
+// back row between hero buildings (on the far side of the road)
+for (let i = -2; i <= 2; i++) {
+  addTree(i * 3.5, 10 + (Math.random() - 0.5) * 0.8, 0.9 + Math.random() * 0.3);
+}
+
+// simple people: colored capsules with a small head sphere
+function addPerson(x, z, color) {
+  const shirt = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
+  const pants = new THREE.MeshStandardMaterial({ color: 0x2a2a35, roughness: 0.95 });
+  const skin  = new THREE.MeshStandardMaterial({ color: 0xe7b793, roughness: 0.8 });
+
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.55, 4, 8), shirt);
+  body.position.set(x, 0.7, z);
+  body.castShadow = true;
+  scene.add(body);
+
+  const legs = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.4, 4, 8), pants);
+  legs.position.set(x, 0.25, z);
+  legs.castShadow = true;
+  scene.add(legs);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), skin);
+  head.position.set(x, 1.15, z);
+  head.castShadow = true;
+  scene.add(head);
+}
+const shirts = [0xd65a5a, 0x4a8cd6, 0xd6a94a, 0x6bc28b, 0x9b6bd6, 0xd66b9b];
+// a small crowd near each building + some on the crosswalk
+addPerson(-6, 3, shirts[0]);
+addPerson(-9, 3.5, shirts[1]);
+addPerson(-7, 4.2, shirts[2]);
+addPerson(7, 3.2, shirts[3]);
+addPerson(9, 4, shirts[4]);
+addPerson(5.5, 3.8, shirts[5]);
+addPerson(-1, 6, shirts[1]);
+addPerson(1.5, 6.3, shirts[2]);
+addPerson(-3, 6.8, shirts[3]);
 
 // labels (sprites)
 function makeLabel(text, color) {
