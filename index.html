@@ -329,9 +329,9 @@ function applyTMD(b, tmdDisp) {
 
 const clock = new THREE.Clock();
 function resize() {
-  const w = canvas.clientWidth = window.innerWidth;
-  const h = canvas.clientHeight = window.innerHeight;
-  renderer.setSize(w, h, false);
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, true);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
