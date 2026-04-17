@@ -399,7 +399,7 @@ function makeBuilding(x, facadeTex, withTMD) {
   foundation.castShadow = foundation.receiveShadow = true;
   group.add(foundation);
 
-  // floors — each is a slim slab with glass curtain wall
+  // floors — glass curtain wall on the four sides, concrete slab on top + bottom
   const floors = [];
   const wallMat = new THREE.MeshPhysicalMaterial({
     map: facadeTex,
@@ -409,11 +409,16 @@ function makeBuilding(x, facadeTex, withTMD) {
     clearcoatRoughness: 0.12,
     envMapIntensity: 1.15,
   });
+  const slabMat = new THREE.MeshStandardMaterial({
+    color: 0x9a9a9a, roughness: 0.95, metalness: 0.0,
+  });
+  // BoxGeometry face order: [+x, -x, +y, -y, +z, -z] = right, left, top, bottom, front, back
+  const floorMats = [wallMat, wallMat, slabMat, slabMat, wallMat, wallMat];
 
   for (let i = 0; i < FLOORS; i++) {
     const f = new THREE.Mesh(
       new THREE.BoxGeometry(BUILDING_W, FLOOR_H, BUILDING_D),
-      wallMat
+      floorMats
     );
     f.castShadow = f.receiveShadow = true;
     floors.push(f);
