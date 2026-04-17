@@ -902,10 +902,13 @@ function stepCollapseA(dt) {
   }
 }
 
+const _tmpVec3 = new THREE.Vector3();
 function spawnRubbleFX(dt) {
   if (state.aCollapseT < 0.2) return;
-  // world-space position of the foundation center (particles are added to the scene, not the group)
-  const baseX = buildingA.group.position.x + buildingA.foundation.position.x;
+  // true world-space position of the foundation (regardless of parent transforms)
+  buildingA.foundation.getWorldPosition(_tmpVec3);
+  const baseX = _tmpVec3.x;
+  const baseZ = _tmpVec3.z;
   const elapsed = state.aCollapseT;
   // noticeable puffing cloud for the first couple seconds, then steady smoulder
   const smokeRate = elapsed < 2.5 ? 22 : (elapsed < 8 ? 10 : 5);
@@ -916,9 +919,9 @@ function spawnRubbleFX(dt) {
     const expected = rate * dt;
     const n = Math.floor(expected) + (Math.random() < (expected - Math.floor(expected)) ? 1 : 0);
     for (let i = 0; i < n; i++) {
-      // tight spawn around the building center
+      // tight spawn around the building center (world coords)
       const sx = baseX + (Math.random() - 0.5) * 1.6;
-      const sz = (Math.random() - 0.5) * 1.6;
+      const sz = baseZ + (Math.random() - 0.5) * 1.6;
       if (kind === 'smoke') {
         spawnParticle('smoke', sx, 0.6 + Math.random() * 1.0, sz);
       } else if (kind === 'fire') {
