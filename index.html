@@ -678,32 +678,61 @@ const state = {
   // collapse state for building A only (TMD protects B)
   aCollapseT: -1,      // -1 = intact, >=0 = seconds since collapse triggered
   aFloorPhys: null,    // per-floor rigid-body-ish state when collapsing
+  aDamage: 0,          // structural damage accumulator (0..1)
 };
 
-const COLLAPSE_THRESHOLD = 1.0;   // top-floor sway (world units) that triggers collapse
-const GRAVITY = 28;
+// Damage accumulates while sway exceeds a threshold; collapse when damage reaches 1.
+// At max sway (~1.2), that takes roughly 4-6 seconds of heavy shaking.
+const DAMAGE_SWAY_THRESHOLD = 0.55;
+const DAMAGE_RATE = 0.28;
+const GRAVITY = 11;   // slower, cinematic fall
 
 // ---------- particle system (fire + smoke) ----------
 function makeParticleTex(kind) {
   const c = document.createElement('canvas');
-  c.width = c.height = 128;
+  c.width = c.height = 256;
   const ctx = c.getContext('2d');
-  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+
   if (kind === 'smoke') {
-    g.addColorStop(0, 'rgba(80,80,85,0.9)');
-    g.addColorStop(0.5, 'rgba(70,70,75,0.55)');
-    g.addColorStop(1, 'rgba(60,60,65,0)');
+    // build a cauliflower-shaped smoke puff from many overlapping radial blobs
+    ctx.clearRect(0, 0, 256, 256);
+    const blobs = 14;
+    for (let i = 0; i < blobs; i++) {
+      const ang = (i / blobs) * Math.PI * 2 + Math.random() * 0.6;
+      const dist = 30 + Math.random() * 55;
+      const cx = 128 + Math.cos(ang) * dist;
+      const cy = 128 + Math.sin(ang) * dist;
+      const r  = 48 + Math.random() * 40;
+      const shade = 45 + Math.floor(Math.random() * 35);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, `rgba(${shade}, ${shade}, ${shade + 4}, 0.95)`);
+      g.addColorStop(0.55, `rgba(${shade - 5}, ${shade - 5}, ${shade - 2}, 0.55)`);
+      g.addColorStop(1, `rgba(${shade - 10}, ${shade - 10}, ${shade - 8}, 0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    }
+    // central dense core
+    const core = ctx.createRadialGradient(128, 128, 0, 128, 128, 90);
+    core.addColorStop(0, 'rgba(35, 35, 38, 0.95)');
+    core.addColorStop(0.7, 'rgba(40, 40, 43, 0.35)');
+    core.addColorStop(1, 'rgba(50, 50, 55, 0)');
+    ctx.fillStyle = core;
+    ctx.fillRect(0, 0, 256, 256);
   } else if (kind === 'ember') {
+    const g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
     g.addColorStop(0, 'rgba(255,220,120,1)');
     g.addColorStop(0.3, 'rgba(255,150,50,0.9)');
     g.addColorStop(1, 'rgba(200,50,20,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
   } else { // fire
+    const g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
     g.addColorStop(0, 'rgba(255,255,200,1)');
     g.addColorStop(0.35, 'rgba(255,140,40,0.95)');
     g.addColorStop(1, 'rgba(120,10,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 256, 256);
   }
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, 128, 128);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -712,7 +741,7 @@ const smokeTex = makeParticleTex('smoke');
 const fireTex  = makeParticleTex('fire');
 const emberTex = makeParticleTex('ember');
 const particles = [];
-const MAX_PARTICLES = 220;
+const MAX_PARTICLES = 450;
 
 function spawnParticle(kind, x, y, z) {
   if (particles.length >= MAX_PARTICLES) return;
@@ -725,11 +754,13 @@ function spawnParticle(kind, x, y, z) {
   const s = new THREE.Sprite(mat);
   let size, life, vy, vx, vz;
   if (kind === 'smoke') {
-    size = 1.6 + Math.random() * 1.8;
-    life = 3.2 + Math.random() * 1.8;
-    vy = 1.6 + Math.random() * 1.2;
-    vx = (Math.random() - 0.5) * 0.8;
-    vz = (Math.random() - 0.5) * 0.6;
+    size = 3.2 + Math.random() * 2.4;
+    life = 5 + Math.random() * 3;
+    vy = 0.9 + Math.random() * 0.9;
+    vx = (Math.random() - 0.5) * 1.4;
+    vz = (Math.random() - 0.5) * 1.0;
+    // slight random rotation so each puff looks different
+    s.material.rotation = Math.random() * Math.PI * 2;
   } else if (kind === 'ember') {
     size = 0.12 + Math.random() * 0.1;
     life = 0.8 + Math.random() * 0.6;
@@ -772,9 +803,14 @@ function updateParticles(dt) {
     p.mesh.position.z += p.vz * dt;
     const frac = p.life / p.maxLife;
     if (p.kind === 'smoke') {
-      p.mesh.material.opacity = Math.min(0.75, frac * 0.95);
-      p.mesh.scale.multiplyScalar(1 + dt * 0.4);
-      p.vx *= 0.985; p.vy *= 0.99; p.vz *= 0.985;
+      // smoke: mostly opaque when fresh, fade only at the end of life
+      const fadeIn  = Math.min(1, (p.maxLife - p.life) / 0.3);
+      const fadeOut = Math.min(1, frac * 1.6);
+      p.mesh.material.opacity = Math.min(0.92, fadeIn * fadeOut);
+      p.mesh.scale.multiplyScalar(1 + dt * 0.75);  // billow outward
+      p.vx *= 0.97; p.vy *= 0.985; p.vz *= 0.97;
+      // slow rotation as it rises
+      p.mesh.material.rotation += dt * 0.2;
     } else if (p.kind === 'ember') {
       p.mesh.material.opacity = frac;
       p.vy -= 1.2 * dt; // gravity on embers
@@ -798,16 +834,16 @@ function triggerCollapseA() {
     state.aFloorPhys.push({
       x: px,
       y: py,
-      vx: (Math.random() - 0.5) * 1.4 + state.aV * shape * 0.12,
-      vy: Math.random() * 0.4,
-      vz: (Math.random() - 0.5) * 0.9,
+      vx: (Math.random() - 0.5) * 0.5 + state.aV * shape * 0.05,
+      vy: Math.random() * 0.15,
+      vz: (Math.random() - 0.5) * 0.35,
       z: 0,
       rotZ: floor.rotation.z,
       rotX: 0,
       rotY: 0,
-      vRotZ: (Math.random() - 0.5) * 4.5,
-      vRotX: (Math.random() - 0.5) * 3,
-      vRotY: (Math.random() - 0.5) * 2,
+      vRotZ: (Math.random() - 0.5) * 1.6,
+      vRotX: (Math.random() - 0.5) * 1.2,
+      vRotY: (Math.random() - 0.5) * 0.8,
       settled: false,
     });
   }
@@ -837,9 +873,9 @@ function stepCollapseA(dt) {
     const fp = state.aFloorPhys[i];
     if (fp.settled) continue;
 
-    // top floors start falling first — delay bottom floors slightly for a pancake collapse
+    // top floors start falling first — longer delay between floors for a slow pancake collapse
     const shape = (i + 1) / FLOORS;
-    const delay = (1 - shape) * 0.35;
+    const delay = (1 - shape) * 1.2;
     if (state.aCollapseT < delay) continue;
 
     fp.vy -= GRAVITY * dt;
@@ -879,20 +915,31 @@ function stepCollapseA(dt) {
 function spawnRubbleFX(dt) {
   if (state.aCollapseT < 0.2) return;
   const baseX = buildingA.foundation.position.x;
-  // spawn rate tapers after initial cloud
   const elapsed = state.aCollapseT;
-  const rate = elapsed < 2 ? 120 : 55;
-  const expected = rate * dt;
-  const n = Math.floor(expected) + (Math.random() < (expected - Math.floor(expected)) ? 1 : 0);
-  for (let i = 0; i < n; i++) {
-    const r = Math.random();
-    const sx = baseX + (Math.random() - 0.5) * 5;
-    const sy = 0.4 + Math.random() * 1.8;
-    const sz = (Math.random() - 0.5) * 3;
-    if (r < 0.55) spawnParticle('smoke', sx, sy, sz);
-    else if (r < 0.85) spawnParticle('fire', sx, sy + 0.3, sz);
-    else spawnParticle('ember', sx, sy + 0.6, sz);
-  }
+  // heavy spewing cloud for the first several seconds, then steady smoulder
+  const smokeRate = elapsed < 4 ? 55 : (elapsed < 10 ? 25 : 12);
+  const fireRate  = elapsed < 3 ? 35 : 15;
+  const emberRate = elapsed < 3 ? 18 : 7;
+
+  const spawn = (kind, rate) => {
+    const expected = rate * dt;
+    const n = Math.floor(expected) + (Math.random() < (expected - Math.floor(expected)) ? 1 : 0);
+    for (let i = 0; i < n; i++) {
+      const sx = baseX + (Math.random() - 0.5) * 5;
+      const sz = (Math.random() - 0.5) * 3.5;
+      if (kind === 'smoke') {
+        // spawn low, let it billow up
+        spawnParticle('smoke', sx, 0.6 + Math.random() * 1.2, sz);
+      } else if (kind === 'fire') {
+        spawnParticle('fire', sx, 0.5 + Math.random() * 0.9, sz);
+      } else {
+        spawnParticle('ember', sx, 0.8 + Math.random() * 1.0, sz);
+      }
+    }
+  };
+  spawn('smoke', smokeRate);
+  spawn('fire', fireRate);
+  spawn('ember', emberRate);
 }
 
 function resetCollapseA() {
@@ -969,13 +1016,13 @@ function stepPhysics(dt) {
 
   if (state.aCollapseT < 0) {
     state.peakA = Math.max(state.peakA * 0.999, Math.abs(state.aX));
+
+    // damage accumulation: sustained heavy sway degrades the structure
+    const over = Math.max(0, Math.abs(state.aX) - DAMAGE_SWAY_THRESHOLD);
+    state.aDamage += over * DAMAGE_RATE * dt;
+    if (state.aDamage >= 1) triggerCollapseA();
   }
   state.peakB = Math.max(state.peakB * 0.999, Math.abs(state.bX));
-
-  // trigger collapse of no-TMD building when sway gets severe
-  if (state.aCollapseT < 0 && Math.abs(state.aX) > COLLAPSE_THRESHOLD) {
-    triggerCollapseA();
-  }
 }
 
 // ---------- render ----------
@@ -1056,6 +1103,7 @@ $('impulse').addEventListener('click', () => {
 $('reset').addEventListener('click', () => {
   state.aX = state.aV = state.bX = state.bV = state.tX = state.tV = 0;
   state.gx = 0; state.quakeActive = false; state.peakA = state.peakB = 0;
+  state.aDamage = 0;
   resetCollapseA();
   clearParticles();
 });
