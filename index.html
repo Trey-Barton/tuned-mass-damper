@@ -262,8 +262,7 @@ function makeBackdropTexture() {
   ];
   clouds.forEach(([cx, cy, s]) => drawCloud(ctx, cx, cy, s));
 
-  // skyline (draw twice so the texture tiles seamlessly around the cylinder)
-  paintCartoonSkyline(ctx, c.width, c.height);
+  // skyline removed — sky-only backdrop
 
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
