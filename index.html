@@ -80,49 +80,82 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
   }
 }
 </script>
 <script type="module">
 import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
 
 // ---------- scene ----------
 const canvas = document.getElementById('canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.9;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0b1020);
-scene.fog = new THREE.Fog(0x0b1020, 40, 120);
+scene.fog = new THREE.Fog(0xcfe2f3, 140, 380);
 
-const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 2000);
 camera.position.set(3, 13, 58);
 camera.lookAt(3, 11, 0);
 
-// lights
-scene.add(new THREE.HemisphereLight(0x9bb6ff, 0x1a1a2a, 0.45));
-const dir = new THREE.DirectionalLight(0xffffff, 1.1);
-dir.position.set(15, 30, 20);
+// ---------- sunny sky ----------
+const sky = new Sky();
+sky.scale.setScalar(10000);
+scene.add(sky);
+const skyU = sky.material.uniforms;
+skyU['turbidity'].value = 4;
+skyU['rayleigh'].value = 1.2;
+skyU['mieCoefficient'].value = 0.004;
+skyU['mieDirectionalG'].value = 0.8;
+
+const sunPos = new THREE.Vector3();
+const sunPhi = THREE.MathUtils.degToRad(62);      // elevation from zenith
+const sunTheta = THREE.MathUtils.degToRad(130);   // azimuth
+sunPos.setFromSphericalCoords(1, sunPhi, sunTheta);
+skyU['sunPosition'].value.copy(sunPos);
+
+// build environment map from the sky for reflections
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(sky, 0.04).texture;
+
+// ---------- lights ----------
+scene.add(new THREE.HemisphereLight(0xbfd8ff, 0x8a7a5c, 0.55));
+const dir = new THREE.DirectionalLight(0xfff4e0, 2.2);
+dir.position.set(sunPos.x * 50, sunPos.y * 50, sunPos.z * 50);
 dir.castShadow = true;
-dir.shadow.mapSize.set(1024, 1024);
-dir.shadow.camera.left = -30; dir.shadow.camera.right = 30;
-dir.shadow.camera.top = 30; dir.shadow.camera.bottom = -10;
+dir.shadow.mapSize.set(2048, 2048);
+dir.shadow.camera.left = -60; dir.shadow.camera.right = 60;
+dir.shadow.camera.top = 60; dir.shadow.camera.bottom = -10;
+dir.shadow.camera.near = 10; dir.shadow.camera.far = 200;
+dir.shadow.bias = -0.0005;
 scene.add(dir);
 
-// ground
-const groundGeo = new THREE.PlaneGeometry(200, 200, 40, 40);
-const groundMat = new THREE.MeshStandardMaterial({ color: 0x11182c, roughness: 0.95 });
+// ---------- ground (street/plaza) ----------
+const groundGeo = new THREE.PlaneGeometry(600, 600);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x474a55, roughness: 0.95, metalness: 0.0 });
 const ground = new THREE.Mesh(groundGeo, groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.receiveShadow = true;
 scene.add(ground);
 
-// grid
-const grid = new THREE.GridHelper(200, 80, 0x1e2a55, 0x141c36);
-grid.position.y = 0.01;
-scene.add(grid);
+// lane markings (just a visual flourish)
+for (let i = -1; i <= 1; i += 2) {
+  const stripe = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.3, 200),
+    new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.8 })
+  );
+  stripe.rotation.x = -Math.PI / 2;
+  stripe.position.set(i * 14, 0.02, 0);
+  ground.add(new THREE.Object3D()); // spacer, ignore
+  scene.add(stripe);
+}
 
 // ---------- buildings ----------
 const FLOORS = 18;
@@ -130,60 +163,88 @@ const FLOOR_H = 1.2;
 const BUILDING_W = 2.6;
 const BUILDING_D = 2.6;
 
-// pre-built window facade texture (shared by both buildings)
-function makeFacadeTexture() {
+// realistic glass-curtain-wall texture: mullions + per-pane sky gradient + occasional lit windows
+function makeFacadeTexture(seed = 0) {
   const c = document.createElement('canvas');
-  c.width = 256; c.height = 256;
+  c.width = 512; c.height = 512;
   const ctx = c.getContext('2d');
-  // base wall color
-  ctx.fillStyle = '#1a2030';
-  ctx.fillRect(0, 0, 256, 256);
-  // window grid
-  const cols = 6, rows = 8;
-  const pad = 6;
-  const winW = (256 - pad * (cols + 1)) / cols;
-  const winH = (256 - pad * (rows + 1)) / rows;
+
+  const cols = 8, rows = 10;
+  const colW = 512 / cols;
+  const rowH = 512 / rows;
+
+  // dark mullion base
+  ctx.fillStyle = '#15181f';
+  ctx.fillRect(0, 0, 512, 512);
+
+  // each pane: sky-gradient reflection, occasionally lit interior
+  const rand = (i) => {
+    // deterministic-ish with seed so each building has its own pattern
+    const x = Math.sin((i + 1) * (seed + 12.9898)) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  let k = 0;
   for (let r = 0; r < rows; r++) {
     for (let col = 0; col < cols; col++) {
-      const lit = Math.random() < 0.7;
-      const shade = lit ? 200 + Math.floor(Math.random() * 55) : 40 + Math.floor(Math.random() * 30);
-      const tint = lit ? `rgb(${shade}, ${shade - 10}, ${Math.floor(shade * 0.6)})`
-                       : `rgb(${shade}, ${shade + 5}, ${shade + 15})`;
-      ctx.fillStyle = tint;
-      ctx.fillRect(pad + col * (winW + pad), pad + r * (winH + pad), winW, winH);
+      k++;
+      const x = col * colW, y = r * rowH;
+      const lit = rand(k) < 0.08;
+      const g = ctx.createLinearGradient(x, y, x, y + rowH);
+      if (lit) {
+        const warm = 200 + Math.floor(rand(k + 7) * 55);
+        g.addColorStop(0, `rgb(${warm}, ${Math.floor(warm * 0.85)}, ${Math.floor(warm * 0.45)})`);
+        g.addColorStop(1, `rgb(${Math.floor(warm * 0.6)}, ${Math.floor(warm * 0.5)}, ${Math.floor(warm * 0.25)})`);
+      } else {
+        // sky reflection — top brighter, bottom picks up ground tint
+        const tint = 0.85 + rand(k + 3) * 0.3;
+        const topR = Math.floor(120 * tint), topG = Math.floor(170 * tint), topB = Math.floor(215 * tint);
+        const botR = Math.floor(55 * tint), botG = Math.floor(72 * tint), botB = Math.floor(95 * tint);
+        g.addColorStop(0, `rgb(${topR}, ${topG}, ${topB})`);
+        g.addColorStop(0.55, `rgb(${Math.floor((topR + botR) / 2)}, ${Math.floor((topG + botG) / 2)}, ${Math.floor((topB + botB) / 2)})`);
+        g.addColorStop(1, `rgb(${botR}, ${botG}, ${botB})`);
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(x + 1.5, y + 1.5, colW - 3, rowH - 3);
+
+      // subtle specular streak near top of pane
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fillRect(x + 3, y + 3, colW * 0.35, 1.5);
     }
   }
+
+  // roughness/metalness map carried via the color map is fine for this use
+
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
-const SHARED_FACADE = makeFacadeTexture();
+const FACADE_A = makeFacadeTexture(1);
+const FACADE_B = makeFacadeTexture(2);
 
-function makeBuilding(x, tintColor, withTMD) {
+function makeBuilding(x, facadeTex, withTMD) {
   const group = new THREE.Group();
   group.position.x = x;
 
   // plaza / base pad (moves with ground)
   const foundation = new THREE.Mesh(
     new THREE.BoxGeometry(BUILDING_W + 2.5, 0.3, BUILDING_D + 2.5),
-    new THREE.MeshStandardMaterial({ color: 0x2a3454, roughness: 0.9 })
+    new THREE.MeshStandardMaterial({ color: 0x3a4050, roughness: 0.85 })
   );
   foundation.position.y = 0.15;
   foundation.castShadow = foundation.receiveShadow = true;
   group.add(foundation);
 
-  // floors — each is a slim slab with window facade texture
+  // floors — each is a slim slab with glass curtain wall
   const floors = [];
-  const facadeTex = SHARED_FACADE.clone();
-  facadeTex.needsUpdate = true;
-  facadeTex.repeat.set(1, 1);
-
-  const wallMat = new THREE.MeshStandardMaterial({
+  const wallMat = new THREE.MeshPhysicalMaterial({
     map: facadeTex,
-    color: tintColor,
-    roughness: 0.4,
-    metalness: 0.25,
-    emissive: new THREE.Color(tintColor).multiplyScalar(0.05),
+    roughness: 0.15,
+    metalness: 0.55,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.12,
+    envMapIntensity: 1.15,
   });
 
   for (let i = 0; i < FLOORS; i++) {
@@ -269,8 +330,104 @@ function makeBuilding(x, tintColor, withTMD) {
   return { group, foundation, floors, tmd, tmdPivot };
 }
 
-const buildingA = makeBuilding(-8, 0xc9d4ec, false);  // no damper
-const buildingB = makeBuilding(8, 0xc9d4ec, true);    // with damper
+const buildingA = makeBuilding(-8, FACADE_A, false);  // no damper
+const buildingB = makeBuilding(8, FACADE_B, true);    // with damper
+
+// ---------- surrounding cityscape ----------
+function makeCityFacadeTexture(seed) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  // base tint varies per building
+  const bases = ['#3a4250', '#4a4538', '#3d4a55', '#52483c', '#3e3e48', '#455060'];
+  ctx.fillStyle = bases[Math.floor((Math.abs(Math.sin(seed * 7.3)) * 6) % 6)];
+  ctx.fillRect(0, 0, 256, 256);
+  const cols = 5 + Math.floor(Math.abs(Math.sin(seed * 3.1)) * 4);
+  const rows = 6 + Math.floor(Math.abs(Math.cos(seed * 2.7)) * 5);
+  const colW = 256 / cols, rowH = 256 / rows;
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      const rnd = Math.abs(Math.sin((r * cols + col + 1) * (seed + 0.31))) ;
+      const lit = rnd < 0.12;
+      if (lit) {
+        const w = 200 + Math.floor(rnd * 400 % 55);
+        ctx.fillStyle = `rgb(${w}, ${Math.floor(w * 0.85)}, ${Math.floor(w * 0.5)})`;
+      } else {
+        const v = 90 + Math.floor(rnd * 60);
+        ctx.fillStyle = `rgb(${Math.floor(v * 0.7)}, ${Math.floor(v * 0.85)}, ${v})`;
+      }
+      ctx.fillRect(col * colW + 2, r * rowH + 2, colW - 4, rowH - 4);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+function makeCityscape() {
+  const cityGroup = new THREE.Group();
+  scene.add(cityGroup);
+
+  // shared geometry for perf
+  const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+  const textures = Array.from({ length: 8 }, (_, i) => makeCityFacadeTexture(i + 3));
+
+  // place buildings on an annular grid — outside the hero zone
+  // hero buildings occupy roughly |x| <= 12, |z| <= 6
+  const placed = [];
+  const clearOfHeroes = (x, z, w, d) =>
+    !(x - w / 2 < 12 && x + w / 2 > -12 && z - d / 2 < 7 && z + d / 2 > -7);
+
+  let attempts = 0;
+  while (placed.length < 70 && attempts < 600) {
+    attempts++;
+    // bias placement to a ring
+    const r = 20 + Math.random() * 130;
+    const ang = Math.random() * Math.PI * 2;
+    const x = Math.cos(ang) * r;
+    const z = Math.sin(ang) * r;
+    const w = 3 + Math.random() * 7;
+    const d = 3 + Math.random() * 7;
+    const h = 6 + Math.pow(Math.random(), 1.6) * 40;
+
+    if (!clearOfHeroes(x, z, w, d)) continue;
+    // quick overlap check
+    let ok = true;
+    for (const p of placed) {
+      if (Math.abs(p.x - x) < (p.w + w) / 2 + 1 && Math.abs(p.z - z) < (p.d + d) / 2 + 1) { ok = false; break; }
+    }
+    if (!ok) continue;
+
+    const tex = textures[Math.floor(Math.random() * textures.length)].clone();
+    tex.needsUpdate = true;
+    // scale texture repeats to building proportions so windows look similar size
+    tex.repeat.set(Math.max(1, Math.round(w / 3)), Math.max(1, Math.round(h / 3)));
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: 0.6 + Math.random() * 0.3,
+      metalness: 0.15 + Math.random() * 0.25,
+    });
+    const m = new THREE.Mesh(boxGeo, mat);
+    m.scale.set(w, h, d);
+    m.position.set(x, h / 2, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    cityGroup.add(m);
+
+    // simple roof cap
+    const capMat = new THREE.MeshStandardMaterial({ color: 0x2a2e38, roughness: 0.9 });
+    const cap = new THREE.Mesh(boxGeo, capMat);
+    cap.scale.set(w * 0.6, 0.8, d * 0.6);
+    cap.position.set(x, h + 0.4, z);
+    cityGroup.add(cap);
+
+    placed.push({ x, z, w, d });
+  }
+}
+makeCityscape();
 
 // labels (sprites)
 function makeLabel(text, color) {
