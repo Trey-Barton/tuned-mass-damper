@@ -48,8 +48,8 @@
 
   <div class="row">
     <label>Quake strength</label>
-    <input id="amp" type="range" min="0" max="1" step="0.01" value="0.5" />
-    <span id="ampV" class="val">0.50</span>
+    <input id="amp" type="range" min="0" max="0.5" step="0.01" value="0.25" />
+    <span id="ampV" class="val">0.25</span>
   </div>
   <div class="row">
     <label>Quake frequency</label>
@@ -667,15 +667,248 @@ function tmdParams(mu) {
 const state = {
   // ground
   gx: 0, quakeT: 0, quakeActive: false, quakeDur: 0,
-  amp: 0.5, freq: 1.0, mu: 0.05,
+  amp: 0.25, freq: 1.0, mu: 0.05,
   // building A: top displacement x, velocity v (modal)
   aX: 0, aV: 0,
   // building B: top displacement & velocity
   bX: 0, bV: 0,
-  // TMD: absolute displacement & velocity (we'll compute relative to b for force)
+  // TMD: absolute displacement & velocity
   tX: 0, tV: 0,
-  peakA: 0, peakB: 0
+  peakA: 0, peakB: 0,
+  // collapse state for building A only (TMD protects B)
+  aCollapseT: -1,      // -1 = intact, >=0 = seconds since collapse triggered
+  aFloorPhys: null,    // per-floor rigid-body-ish state when collapsing
 };
+
+const COLLAPSE_THRESHOLD = 1.0;   // top-floor sway (world units) that triggers collapse
+const GRAVITY = 28;
+
+// ---------- particle system (fire + smoke) ----------
+function makeParticleTex(kind) {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  if (kind === 'smoke') {
+    g.addColorStop(0, 'rgba(80,80,85,0.9)');
+    g.addColorStop(0.5, 'rgba(70,70,75,0.55)');
+    g.addColorStop(1, 'rgba(60,60,65,0)');
+  } else if (kind === 'ember') {
+    g.addColorStop(0, 'rgba(255,220,120,1)');
+    g.addColorStop(0.3, 'rgba(255,150,50,0.9)');
+    g.addColorStop(1, 'rgba(200,50,20,0)');
+  } else { // fire
+    g.addColorStop(0, 'rgba(255,255,200,1)');
+    g.addColorStop(0.35, 'rgba(255,140,40,0.95)');
+    g.addColorStop(1, 'rgba(120,10,0,0)');
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const smokeTex = makeParticleTex('smoke');
+const fireTex  = makeParticleTex('fire');
+const emberTex = makeParticleTex('ember');
+const particles = [];
+const MAX_PARTICLES = 220;
+
+function spawnParticle(kind, x, y, z) {
+  if (particles.length >= MAX_PARTICLES) return;
+  const map = kind === 'smoke' ? smokeTex : (kind === 'ember' ? emberTex : fireTex);
+  const mat = new THREE.SpriteMaterial({
+    map, transparent: true, depthWrite: false,
+    blending: kind === 'smoke' ? THREE.NormalBlending : THREE.AdditiveBlending,
+    toneMapped: false,
+  });
+  const s = new THREE.Sprite(mat);
+  let size, life, vy, vx, vz;
+  if (kind === 'smoke') {
+    size = 1.6 + Math.random() * 1.8;
+    life = 3.2 + Math.random() * 1.8;
+    vy = 1.6 + Math.random() * 1.2;
+    vx = (Math.random() - 0.5) * 0.8;
+    vz = (Math.random() - 0.5) * 0.6;
+  } else if (kind === 'ember') {
+    size = 0.12 + Math.random() * 0.1;
+    life = 0.8 + Math.random() * 0.6;
+    vy = 2.5 + Math.random() * 2;
+    vx = (Math.random() - 0.5) * 2;
+    vz = (Math.random() - 0.5) * 1.2;
+  } else {
+    size = 0.9 + Math.random() * 0.6;
+    life = 0.55 + Math.random() * 0.35;
+    vy = 2.2 + Math.random() * 1.3;
+    vx = (Math.random() - 0.5) * 0.6;
+    vz = (Math.random() - 0.5) * 0.5;
+  }
+  s.scale.set(size, size, 1);
+  s.position.set(x, y, z);
+  scene.add(s);
+  particles.push({ mesh: s, vx, vy, vz, life, maxLife: life, kind });
+}
+
+function clearParticles() {
+  for (const p of particles) {
+    scene.remove(p.mesh);
+    p.mesh.material.dispose();
+  }
+  particles.length = 0;
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) {
+      scene.remove(p.mesh);
+      p.mesh.material.dispose();
+      particles.splice(i, 1);
+      continue;
+    }
+    p.mesh.position.x += p.vx * dt;
+    p.mesh.position.y += p.vy * dt;
+    p.mesh.position.z += p.vz * dt;
+    const frac = p.life / p.maxLife;
+    if (p.kind === 'smoke') {
+      p.mesh.material.opacity = Math.min(0.75, frac * 0.95);
+      p.mesh.scale.multiplyScalar(1 + dt * 0.4);
+      p.vx *= 0.985; p.vy *= 0.99; p.vz *= 0.985;
+    } else if (p.kind === 'ember') {
+      p.mesh.material.opacity = frac;
+      p.vy -= 1.2 * dt; // gravity on embers
+    } else {
+      p.mesh.material.opacity = frac;
+      p.mesh.scale.multiplyScalar(1 - dt * 0.3);
+    }
+  }
+}
+
+// ---------- collapse physics for building A ----------
+function triggerCollapseA() {
+  state.aCollapseT = 0;
+  state.aFloorPhys = [];
+  for (let i = 0; i < FLOORS; i++) {
+    const floor = buildingA.floors[i];
+    const shape = (i + 1) / FLOORS;
+    // preserve current world pose as starting point
+    const px = floor.position.x;
+    const py = floor.position.y;
+    state.aFloorPhys.push({
+      x: px,
+      y: py,
+      vx: (Math.random() - 0.5) * 1.4 + state.aV * shape * 0.12,
+      vy: Math.random() * 0.4,
+      vz: (Math.random() - 0.5) * 0.9,
+      z: 0,
+      rotZ: floor.rotation.z,
+      rotX: 0,
+      rotY: 0,
+      vRotZ: (Math.random() - 0.5) * 4.5,
+      vRotX: (Math.random() - 0.5) * 3,
+      vRotY: (Math.random() - 0.5) * 2,
+      settled: false,
+    });
+  }
+  // decouple the group — the collapse sets floor world positions directly.
+  // To make "floor.position = world x/y", we need group at origin. Shift group to origin and bake its x into floor positions.
+  const gx = buildingA.group.position.x;
+  buildingA.group.position.x = 0;
+  for (const fp of state.aFloorPhys) fp.x += gx;
+  // also keep foundation visually: move it to its own world x
+  buildingA.foundation.position.x = gx + state.gx;
+  // hide the antenna spire (it'd be floating)
+  buildingA.floors[FLOORS - 1].traverse(obj => {
+    if (obj.isMesh && obj !== buildingA.floors[FLOORS - 1]) {
+      // leave trim/spire children but they'll tumble with parent
+    }
+  });
+  // move the NO DAMPER label down so it doesn't float
+  labelA.visible = false;
+}
+
+function stepCollapseA(dt) {
+  state.aCollapseT += dt;
+  const baseX = buildingA.foundation.position.x;
+  const rubbleBaseY = 0.3 + FLOOR_H * 0.4;
+
+  for (let i = 0; i < FLOORS; i++) {
+    const fp = state.aFloorPhys[i];
+    if (fp.settled) continue;
+
+    // top floors start falling first — delay bottom floors slightly for a pancake collapse
+    const shape = (i + 1) / FLOORS;
+    const delay = (1 - shape) * 0.35;
+    if (state.aCollapseT < delay) continue;
+
+    fp.vy -= GRAVITY * dt;
+    fp.x += fp.vx * dt;
+    fp.y += fp.vy * dt;
+    fp.z += fp.vz * dt;
+    fp.rotZ += fp.vRotZ * dt;
+    fp.rotX += fp.vRotX * dt;
+    fp.rotY += fp.vRotY * dt;
+
+    // ground collision — pile up around the foundation
+    const minY = rubbleBaseY;
+    if (fp.y < minY) {
+      fp.y = minY;
+      if (fp.vy < 0) fp.vy = -fp.vy * 0.18;
+      fp.vx *= 0.55;
+      fp.vz *= 0.55;
+      fp.vRotZ *= 0.4;
+      fp.vRotX *= 0.4;
+      fp.vRotY *= 0.4;
+      // keep rubble near the foundation; pull back if drifting far
+      const drift = fp.x - baseX;
+      if (Math.abs(drift) > 3.5) fp.vx -= Math.sign(drift) * 0.6;
+      if (Math.abs(fp.vy) < 0.3 && Math.abs(fp.vx) < 0.25 && Math.abs(fp.vz) < 0.25) {
+        fp.settled = true;
+        fp.vx = fp.vy = fp.vz = 0;
+        fp.vRotZ = fp.vRotX = fp.vRotY = 0;
+      }
+    }
+
+    const m = buildingA.floors[i];
+    m.position.set(fp.x, fp.y, fp.z);
+    m.rotation.set(fp.rotX, fp.rotY, fp.rotZ);
+  }
+}
+
+function spawnRubbleFX(dt) {
+  if (state.aCollapseT < 0.2) return;
+  const baseX = buildingA.foundation.position.x;
+  // spawn rate tapers after initial cloud
+  const elapsed = state.aCollapseT;
+  const rate = elapsed < 2 ? 120 : 55;
+  const expected = rate * dt;
+  const n = Math.floor(expected) + (Math.random() < (expected - Math.floor(expected)) ? 1 : 0);
+  for (let i = 0; i < n; i++) {
+    const r = Math.random();
+    const sx = baseX + (Math.random() - 0.5) * 5;
+    const sy = 0.4 + Math.random() * 1.8;
+    const sz = (Math.random() - 0.5) * 3;
+    if (r < 0.55) spawnParticle('smoke', sx, sy, sz);
+    else if (r < 0.85) spawnParticle('fire', sx, sy + 0.3, sz);
+    else spawnParticle('ember', sx, sy + 0.6, sz);
+  }
+}
+
+function resetCollapseA() {
+  if (state.aCollapseT < 0) return;
+  state.aCollapseT = -1;
+  state.aFloorPhys = null;
+  // restore group position
+  buildingA.group.position.x = -8;
+  // restore labels/visibility
+  labelA.visible = true;
+  // floor positions/rotations will be rewritten by applySway next frame
+  for (const f of buildingA.floors) {
+    f.rotation.set(0, 0, 0);
+    f.position.z = 0;
+  }
+}
 
 function stepPhysics(dt) {
   // ground motion
@@ -694,11 +927,12 @@ function stepPhysics(dt) {
     state.gx *= 0.9;
   }
 
-  // Building A: SDOF forced by ground acceleration
-  // x'' + 2*zeta*w*x' + w^2*x = -gAcc  (relative to ground)
-  const aAcc = -gAcc - 2 * ZETA * W_N * state.aV - W_N * W_N * state.aX;
-  state.aV += aAcc * dt;
-  state.aX += state.aV * dt;
+  // Building A: SDOF forced by ground acceleration — only if still intact
+  if (state.aCollapseT < 0) {
+    const aAcc = -gAcc - 2 * ZETA * W_N * state.aV - W_N * W_N * state.aX;
+    state.aV += aAcc * dt;
+    state.aX += state.aV * dt;
+  }
 
   // Building B with TMD (2-DOF)
   const mu = state.mu;
@@ -733,8 +967,15 @@ function stepPhysics(dt) {
     if (sign * relV > 0) state.tV = state.bV - sign * Math.abs(relV) * 0.35;
   }
 
-  state.peakA = Math.max(state.peakA * 0.999, Math.abs(state.aX));
+  if (state.aCollapseT < 0) {
+    state.peakA = Math.max(state.peakA * 0.999, Math.abs(state.aX));
+  }
   state.peakB = Math.max(state.peakB * 0.999, Math.abs(state.bX));
+
+  // trigger collapse of no-TMD building when sway gets severe
+  if (state.aCollapseT < 0 && Math.abs(state.aX) > COLLAPSE_THRESHOLD) {
+    triggerCollapseA();
+  }
 }
 
 // ---------- render ----------
@@ -775,9 +1016,16 @@ function tick() {
   const sub = 4;
   for (let i = 0; i < sub; i++) stepPhysics(dt / sub);
 
-  applySway(buildingA, state.aX);
+  if (state.aCollapseT < 0) {
+    applySway(buildingA, state.aX);
+  } else {
+    stepCollapseA(dt);
+    spawnRubbleFX(dt);
+  }
   applySway(buildingB, state.bX);
   applyTMD(buildingB, state.tX - state.bX);
+
+  updateParticles(dt);
 
   document.getElementById('peakA').textContent = state.peakA.toFixed(2);
   document.getElementById('peakB').textContent = state.peakB.toFixed(2);
@@ -808,6 +1056,8 @@ $('impulse').addEventListener('click', () => {
 $('reset').addEventListener('click', () => {
   state.aX = state.aV = state.bX = state.bV = state.tX = state.tV = 0;
   state.gx = 0; state.quakeActive = false; state.peakA = state.peakB = 0;
+  resetCollapseA();
+  clearParticles();
 });
 
 // fixed camera — no orbit
