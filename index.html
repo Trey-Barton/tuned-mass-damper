@@ -700,14 +700,7 @@ $('reset').addEventListener('click', () => {
   state.gx = 0; state.quakeActive = false; state.peakA = state.peakB = 0;
 });
 
-// subtle camera orbit
-let camAngle = 0;
-setInterval(() => {
-  camAngle += 0.0015;
-  camera.position.x = 3 + Math.sin(camAngle) * 4;
-  camera.position.z = 58 + Math.cos(camAngle) * 2;
-  camera.lookAt(3, 11, 0);
-}, 16);
+// fixed camera — no orbit
 </script>
 </body>
 </html>
