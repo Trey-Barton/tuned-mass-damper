@@ -48,8 +48,8 @@
 
   <div class="row">
     <label>Quake strength</label>
-    <input id="amp" type="range" min="0.05" max="0.2" step="0.005" value="0.12" />
-    <span id="ampV" class="val">0.12</span>
+    <input id="amp" type="range" min="0.05" max="0.14" step="0.005" value="0.09" />
+    <span id="ampV" class="val">0.09</span>
   </div>
   <div class="row">
     <label>Quake frequency</label>
@@ -672,7 +672,7 @@ function tmdParams(mu) {
 const state = {
   // ground
   gx: 0, quakeT: 0, quakeActive: false, quakeDur: 0,
-  amp: 0.12, freq: 1.0, mu: 0.05,
+  amp: 0.09, freq: 1.0, mu: 0.05,
   // building A: top displacement x, velocity v (modal)
   aX: 0, aV: 0,
   // building B: top displacement & velocity
@@ -688,8 +688,8 @@ const state = {
 
 // Damage accumulates while sway exceeds a threshold; collapse when damage reaches 1.
 // Tuned for the compressed amplitude range (0.05..0.2) so collapse happens near the top end.
-const DAMAGE_SWAY_THRESHOLD = 0.32;
-const DAMAGE_RATE = 0.9;
+const DAMAGE_SWAY_THRESHOLD = 0.22;
+const DAMAGE_RATE = 1.1;
 const GRAVITY = 11;   // slower, cinematic fall
 
 // ---------- particle system (fire + smoke) ----------
@@ -992,17 +992,23 @@ function stepPhysics(dt) {
   state.tV += tAcc * dt;
   state.tX += state.tV * dt;
 
-  // clamp TMD so the ball cannot exit its enclosure on the roof.
-  // Enclosure interior half-width = (BUILDING_W - 0.2)/2 = 1.2, ball radius = 0.55
-  // Pendulum horizontal offset ~ relative displacement (tX - bX).
-  const MAX_TMD_DISP = 0.65;
+  // soft-limit the TMD's swing so it stays near the center of its enclosure
+  // rather than banging into the walls. Damped spring pulls it back once past a soft edge.
+  const SOFT_LIMIT = 0.28;
+  const HARD_LIMIT = 0.38;
   const rel = state.tX - state.bX;
-  if (Math.abs(rel) > MAX_TMD_DISP) {
+  if (Math.abs(rel) > SOFT_LIMIT) {
     const sign = Math.sign(rel);
-    state.tX = state.bX + sign * MAX_TMD_DISP;
+    const over = Math.abs(rel) - SOFT_LIMIT;
+    // progressive restoring acceleration proportional to overshoot
+    const kRestore = 140;
+    state.tV -= sign * over * kRestore * dt;
+  }
+  if (Math.abs(rel) > HARD_LIMIT) {
+    const sign = Math.sign(rel);
+    state.tX = state.bX + sign * HARD_LIMIT;
     const relV = state.tV - state.bV;
-    // only reverse if still moving outward — soft bounce with energy loss
-    if (sign * relV > 0) state.tV = state.bV - sign * Math.abs(relV) * 0.35;
+    if (sign * relV > 0) state.tV = state.bV - sign * Math.abs(relV) * 0.15;
   }
 
   if (state.aCollapseT < 0) {
