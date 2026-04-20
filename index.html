@@ -52,11 +52,6 @@
     <span id="ampV" class="val">0.09</span>
   </div>
   <div class="row">
-    <label>Quake frequency</label>
-    <input id="freq" type="range" min="0.3" max="3" step="0.01" value="1.0" />
-    <span id="freqV" class="val">1.00</span>
-  </div>
-  <div class="row">
     <label>Damper mass</label>
     <input id="tmdMass" type="range" min="0.01" max="0.3" step="0.005" value="0.08" />
     <span id="tmdMassV" class="val">0.08</span>
@@ -1015,7 +1010,7 @@ function tmdParams(mu) {
 const state = {
   // ground
   gx: 0, quakeT: 0, quakeActive: false, quakeDur: 0,
-  amp: 0.09, freq: 1.0, mu: 0.08,
+  amp: 0.09, freq: 0.7, mu: 0.08,  // freq locked at the building's natural resonance
   // building A: top displacement x, velocity v (modal)
   aX: 0, aV: 0,
   // building B: top displacement & velocity
@@ -1030,10 +1025,18 @@ const state = {
 };
 
 // Damage accumulates while sway exceeds a threshold; collapse when damage reaches 1.
-// Tuned for the compressed amplitude range (0.05..0.2) so collapse happens near the top end.
-const DAMAGE_SWAY_THRESHOLD = 0.22;
+// The threshold now scales with the damper mass: a beefier damper means a more
+// robust structural design, so the left tower tolerates more sway before failing.
+// Collapse only triggers when amp is high AND mu is low.
+const BASE_DAMAGE_THRESHOLD = 0.18;
 const DAMAGE_RATE = 1.1;
 const GRAVITY = 11;   // slower, cinematic fall
+function damageSwayThreshold(mu) {
+  // mu=0.01 → 0.188 (easy collapse at high amp)
+  // mu=0.08 → 0.244
+  // mu=0.30 → 0.42  (very hard to collapse)
+  return BASE_DAMAGE_THRESHOLD + mu * 0.8;
+}
 
 // ---------- particle system (fire + smoke) ----------
 function makeParticleTex(kind) {
@@ -1357,8 +1360,9 @@ function stepPhysics(dt) {
   if (state.aCollapseT < 0) {
     state.peakA = Math.max(state.peakA * 0.999, Math.abs(state.aX));
 
-    // damage accumulation: sustained heavy sway degrades the structure
-    const over = Math.max(0, Math.abs(state.aX) - DAMAGE_SWAY_THRESHOLD);
+    // damage accumulation: sustained heavy sway degrades the structure.
+    // Threshold scales with damper mass (stiffer construction when mu is high).
+    const over = Math.max(0, Math.abs(state.aX) - damageSwayThreshold(state.mu));
     state.aDamage += over * DAMAGE_RATE * dt;
     if (state.aDamage >= 1) triggerCollapseA();
   }
@@ -1430,7 +1434,7 @@ function bind(id, key, fmt = v => v.toFixed(2)) {
   el.addEventListener('input', update); update();
 }
 bind('amp', 'amp');
-bind('freq', 'freq');
+// (frequency slider removed — quake is locked at the tower's natural resonance)
 bind('tmdMass', 'mu', v => v.toFixed(3));
 
 $('shake').addEventListener('click', () => {
