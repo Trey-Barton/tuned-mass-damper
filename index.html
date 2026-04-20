@@ -688,29 +688,37 @@ function addBgBuilding(x, z, w, h, d, paletteIdx) {
   scene.add(trim);
 }
 
-// static skyline row behind the heroes (far side of the road)
+// static skyline row BEHIND the heroes (negative z = farther from camera)
 const bgRow = [
-  { x: -42, z: 28, w: 7, h: 22, d: 7 },
-  { x: -32, z: 30, w: 5, h: 16, d: 5 },
-  { x: -24, z: 26, w: 6, h: 28, d: 6 },
-  { x: -16, z: 29, w: 5, h: 19, d: 5 },
-  { x:  -4, z: 27, w: 6, h: 24, d: 6 },
-  { x:   4, z: 29, w: 5, h: 18, d: 5 },
-  { x:  16, z: 26, w: 6, h: 26, d: 6 },
-  { x:  24, z: 28, w: 7, h: 32, d: 7 },
-  { x:  34, z: 30, w: 5, h: 17, d: 5 },
-  { x:  44, z: 27, w: 6, h: 22, d: 6 },
+  { x: -42, z: -30, w: 7, h: 22, d: 7 },
+  { x: -32, z: -32, w: 5, h: 16, d: 5 },
+  { x: -24, z: -28, w: 6, h: 28, d: 6 },
+  { x: -16, z: -31, w: 5, h: 19, d: 5 },
+  { x:  -4, z: -29, w: 6, h: 24, d: 6 },
+  { x:   4, z: -31, w: 5, h: 18, d: 5 },
+  { x:  16, z: -28, w: 6, h: 26, d: 6 },
+  { x:  24, z: -30, w: 7, h: 32, d: 7 },
+  { x:  34, z: -32, w: 5, h: 17, d: 5 },
+  { x:  44, z: -29, w: 6, h: 22, d: 6 },
 ];
 bgRow.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i));
 
-// a few smaller buildings off to the sides to fill the flanks
+// a second deeper row for more depth variety
+const bgRow2 = [
+  { x: -38, z: -45, w: 6, h: 28, d: 6 },
+  { x: -20, z: -48, w: 8, h: 36, d: 8 },
+  { x:   0, z: -46, w: 7, h: 30, d: 7 },
+  { x:  20, z: -48, w: 8, h: 38, d: 8 },
+  { x:  38, z: -45, w: 6, h: 26, d: 6 },
+];
+bgRow2.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i + 3));
+
+// smaller buildings off to the far sides (behind the heroes, not blocking them)
 const sides = [
-  { x: -26, z:  -6, w: 5, h: 12, d: 5 },
-  { x: -22, z:   4, w: 4, h: 9,  d: 4 },
-  { x:  22, z:   4, w: 4, h: 10, d: 4 },
-  { x:  28, z:  -6, w: 5, h: 14, d: 5 },
-  { x: -30, z:  14, w: 4, h: 11, d: 4 },
-  { x:  30, z:  14, w: 4, h: 13, d: 4 },
+  { x: -28, z: -12, w: 5, h: 12, d: 5 },
+  { x: -24, z: -20, w: 4, h: 9,  d: 4 },
+  { x:  24, z: -20, w: 4, h: 10, d: 4 },
+  { x:  30, z: -12, w: 5, h: 14, d: 5 },
 ];
 sides.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i + 2));
 
