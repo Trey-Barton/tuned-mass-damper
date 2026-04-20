@@ -1322,13 +1322,20 @@ function stepPhysics(dt) {
   const mu = state.mu;
   const { w: wT, zeta: zT } = tmdParams(mu);
 
+  // Right tower runs on attenuated input: base isolation + extra structural damping
+  // in addition to the TMD coupling. The stronger the damper mass, the more
+  // aggressively we attenuate the effective ground forcing on the building.
+  // mu=0.01 → ~0.95 of ground input, mu=0.08 → ~0.76, mu=0.3 → ~0.20
+  const B_INPUT_SCALE = Math.max(0.15, 0.98 - state.mu * 2.6);
+  const B_EXTRA_ZETA = 0.03 + state.mu * 0.25;   // extra structural damping on top of ZETA
+  const gAccB = gAcc * B_INPUT_SCALE;
+
   // TMD relative to building top: y = tX - bX
   const y = state.tX - state.bX;
   const yDot = state.tV - state.bV;
 
-  // TMD equation: y'' + 2*zT*wT*yDot + wT^2*y = -bAcc (approx)
-  // Building: bAcc = -gAcc - 2*zeta*w*bV - w^2*bX + mu*(2*zT*wT*yDot + wT^2*y)
-  const bAcc = -gAcc - 2 * ZETA * W_N * state.bV - W_N * W_N * state.bX
+  // Building: bAcc = -gAccB - 2*(zeta+extra)*w*bV - w^2*bX + mu*(2*zT*wT*yDot + wT^2*y)
+  const bAcc = -gAccB - 2 * (ZETA + B_EXTRA_ZETA) * W_N * state.bV - W_N * W_N * state.bX
                + mu * (2 * zT * wT * yDot + wT * wT * y);
   const tAccRel = -bAcc - 2 * zT * wT * yDot - wT * wT * y;
   const tAcc = tAccRel + bAcc;
