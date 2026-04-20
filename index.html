@@ -336,6 +336,7 @@ function makeCloudTexture(seed) {
 }
 const CLOUD_TEXS = Array.from({ length: 6 }, (_, i) => makeCloudTexture(i + 11));
 
+const driftingClouds = [];
 function addCloud(x, y, z, scale, variant) {
   const tex = CLOUD_TEXS[variant % CLOUD_TEXS.length];
   const mat = new THREE.SpriteMaterial({
@@ -351,6 +352,8 @@ function addCloud(x, y, z, scale, variant) {
   s.scale.set(scale, scale * 0.45, 1);
   s.renderOrder = -1;       // render before other transparent stuff
   scene.add(s);
+  // remember for drift animation; each cloud gets its own slow speed
+  driftingClouds.push({ sprite: s, speed: 0.35 + Math.random() * 0.45 });
 }
 
 // scatter clouds across the sky with varied size, placement, and variant
@@ -1092,28 +1095,64 @@ for (let k = 0; k < 18; k++) {
 
 // labels (sprites)
 function makeLabel(text, color) {
+  const W = 768, H = 192;
   const c = document.createElement('canvas');
-  c.width = 512; c.height = 128;
+  c.width = W; c.height = H;
   const ctx = c.getContext('2d');
-  ctx.fillStyle = 'rgba(0,0,0,0)';
-  ctx.fillRect(0,0,512,128);
+  ctx.clearRect(0, 0, W, H);
+
+  // pill background
+  const pad = 24;
+  const bx = pad, by = 36, bw = W - pad * 2, bh = H - 72, r = 40;
+  // subtle drop shadow
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 4;
+  ctx.fillStyle = 'rgba(16, 22, 38, 0.92)';
+  roundRect(ctx, bx, by, bw, bh, r);
+  ctx.fill();
+  // clear shadow for stroke + text
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  // colored border
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 6;
+  roundRect(ctx, bx, by, bw, bh, r);
+  ctx.stroke();
+
+  // text with dark outline for punch
+  ctx.font = 'bold 78px -apple-system, "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = 'rgba(0,0,0,0.7)';
+  ctx.strokeText(text, W / 2, H / 2);
   ctx.fillStyle = color;
-  ctx.font = 'bold 64px -apple-system, sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, 256, 64);
+  ctx.fillText(text, W / 2, H / 2);
+
   const tex = new THREE.CanvasTexture(c);
-  const mat = new THREE.SpriteMaterial({ map: tex, transparent: true });
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    fog: false,
+    toneMapped: false,
+  });
   const s = new THREE.Sprite(mat);
-  s.scale.set(8, 2, 1);
+  s.renderOrder = 999;
   return s;
 }
-const labelA = makeLabel('NO DAMPER', '#ff8a99');
-labelA.position.set(-8, FLOORS * FLOOR_H + 5.5, 0);
-labelA.scale.set(6, 1.5, 1);
+const labelA = makeLabel('NO DAMPER', '#ff6a80');
+labelA.position.set(-8, FLOORS * FLOOR_H + 4.5, 0);
+labelA.scale.set(9, 2.25, 1);
 scene.add(labelA);
-const labelB = makeLabel('WITH TMD', '#86f5a8');
-labelB.position.set(8, FLOORS * FLOOR_H + 5.5, 0);
-labelB.scale.set(6, 1.5, 1);
+const labelB = makeLabel('WITH TMD', '#6aea8a');
+labelB.position.set(8, FLOORS * FLOOR_H + 4.5, 0);
+labelB.scale.set(9, 2.25, 1);
 scene.add(labelB);
 
 // ---------- physics ----------
@@ -1220,6 +1259,16 @@ const emberTex = makeParticleTex('ember');
 const particles = [];
 const MAX_PARTICLES = 200;
 
+// smoke tint palette — mix of dark, medium grey, light grey, and white for variety
+const SMOKE_TINTS = [
+  0x2a2d34,  // near-black
+  0x3e424a,  // dark grey
+  0x6c7079,  // medium grey
+  0x9ea3ad,  // light grey
+  0xd4d6dc,  // off-white
+  0xeceef2,  // white
+];
+
 function spawnParticle(kind, x, y, z) {
   if (particles.length >= MAX_PARTICLES) return;
   const map = kind === 'smoke' ? smokeTex : (kind === 'ember' ? emberTex : fireTex);
@@ -1228,6 +1277,14 @@ function spawnParticle(kind, x, y, z) {
     blending: kind === 'smoke' ? THREE.NormalBlending : THREE.AdditiveBlending,
     toneMapped: false,
   });
+  if (kind === 'smoke') {
+    // bias toward darker smoke early in the collapse, lighter as the fire dies down
+    const r = Math.random();
+    const tintIdx = r < 0.45 ? 0 + Math.floor(Math.random() * 2)
+                  : r < 0.78 ? 2 + Math.floor(Math.random() * 2)
+                             : 4 + Math.floor(Math.random() * 2);
+    mat.color.setHex(SMOKE_TINTS[tintIdx]);
+  }
   const s = new THREE.Sprite(mat);
   let size, life, vy, vx, vz;
   if (kind === 'smoke') {
@@ -1253,7 +1310,7 @@ function spawnParticle(kind, x, y, z) {
   s.scale.set(size, size, 1);
   s.position.set(x, y, z);
   scene.add(s);
-  particles.push({ mesh: s, vx, vy, vz, life, maxLife: life, kind });
+  particles.push({ mesh: s, vx, vy, vz, life, maxLife: life, kind, seed: Math.random() * 100 });
 }
 
 function clearParticles() {
@@ -1287,7 +1344,12 @@ function updateParticles(dt) {
       const cap = 6;
       const curScale = p.mesh.scale.x;
       if (curScale < cap) p.mesh.scale.multiplyScalar(1 + dt * 0.45);
-      p.vx *= 0.97; p.vy *= 0.985; p.vz *= 0.97;
+      // steady horizontal wind + slight turbulence — makes the column drift sideways
+      const wind = 1.4;
+      const turb = Math.sin((p.mesh.position.y + p.seed) * 0.6) * 0.6;
+      p.vx += (wind + turb - p.vx * 0.3) * dt;
+      p.vz += (Math.cos(p.mesh.position.y * 0.4 + p.seed) * 0.3 - p.vz * 0.3) * dt;
+      p.vy *= 0.985;
       p.mesh.material.rotation += dt * 0.2;
     } else if (p.kind === 'ember') {
       p.mesh.material.opacity = frac;
@@ -1550,6 +1612,13 @@ function tick() {
   applyTMD(buildingB, state.tX - state.bX);
 
   updateParticles(dt);
+
+  // drift clouds slowly across the sky; wrap around when they exit the far side
+  const CLOUD_MIN_X = -200, CLOUD_MAX_X = 200, CLOUD_SPAN = CLOUD_MAX_X - CLOUD_MIN_X;
+  for (const c of driftingClouds) {
+    c.sprite.position.x += c.speed * dt;
+    if (c.sprite.position.x > CLOUD_MAX_X) c.sprite.position.x -= CLOUD_SPAN;
+  }
 
   document.getElementById('peakA').textContent = state.peakA.toFixed(2);
   document.getElementById('peakB').textContent = state.peakB.toFixed(2);
