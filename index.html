@@ -284,6 +284,56 @@ function makeBackdropTexture() {
 // flat cartoon dome above (covers what's above the cylinder)
 scene.background = new THREE.Color(0x3fb0f4);
 
+// ---------- puffy cartoon clouds ----------
+function makeCloudTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const ctx = c.getContext('2d');
+  // cauliflower of white puffs
+  const puff = (cx, cy, r) => {
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.55, 'rgba(255,255,255,0.75)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+  };
+  puff(128, 128, 85);
+  puff(85, 135, 55);
+  puff(170, 130, 60);
+  puff(110, 105, 50);
+  puff(155, 110, 52);
+  puff(140, 150, 55);
+  // soft under-shadow
+  const sg = ctx.createRadialGradient(128, 165, 5, 128, 165, 80);
+  sg.addColorStop(0, 'rgba(190,210,225,0.35)');
+  sg.addColorStop(1, 'rgba(190,210,225,0)');
+  ctx.fillStyle = sg;
+  ctx.fillRect(48, 120, 160, 80);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const CLOUD_TEX = makeCloudTexture();
+function addCloud(x, y, z, scale) {
+  const mat = new THREE.SpriteMaterial({
+    map: CLOUD_TEX, transparent: true, depthWrite: false, fog: false, toneMapped: false,
+  });
+  const s = new THREE.Sprite(mat);
+  s.position.set(x, y, z);
+  s.scale.set(scale, scale * 0.55, 1);
+  scene.add(s);
+}
+// scatter clouds across the sky, mostly behind the scene and up high
+const cloudPlaces = [
+  [-80, 48, -140, 40], [-35, 55, -150, 46], [  5, 50, -160, 52], [ 45, 52, -145, 44],
+  [ 85, 46, -155, 38], [-120, 58, -170, 42], [110, 60, -165, 46],
+  [-55, 70, -180, 55], [ 30, 68, -185, 52], [ 90, 72, -190, 48],
+  [-25, 42, -110,  32], [ 60, 44, -120,  30],
+  [-90, 75, -210, 60], [ 70, 80, -220, 58], [ 0, 90, -240, 70],
+];
+cloudPlaces.forEach(([x, y, z, s]) => addCloud(x, y, z, s));
+
 // ---------- lights (flatter, less PBR for cartoon feel) ----------
 scene.add(new THREE.HemisphereLight(0xffffff, 0x9ab5a0, 0.85));
 const dir = new THREE.DirectionalLight(0xfff6d5, 1.4);
@@ -492,13 +542,13 @@ function makeBuilding(x, facadeTex, withTMD) {
 
   // translucent glass material for the "TMD floor" (one below top) on the right tower
   const glassMat = new THREE.MeshPhysicalMaterial({
-    color: 0xaedcf2,
+    color: 0x9fcde3,
     transparent: true,
-    opacity: 0.25,
-    roughness: 0.05,
+    opacity: 0.55,
+    roughness: 0.12,
     metalness: 0.0,
-    transmission: 0.85,
-    thickness: 0.3,
+    transmission: 0.45,
+    thickness: 0.5,
     envMapIntensity: 1.0,
     side: THREE.DoubleSide,
   });
@@ -543,6 +593,32 @@ function makeBuilding(x, facadeTex, withTMD) {
   if (withTMD) {
     const ROD_LEN = 0.7;
     const BALL_R  = 0.3;
+
+    // solid dark back panel — frames the pendulum for high contrast
+    const backPanel = new THREE.Mesh(
+      new THREE.BoxGeometry(BUILDING_W * 0.82, FLOOR_H * 0.9, 0.12),
+      new THREE.MeshStandardMaterial({ color: 0x1a2030, roughness: 0.75, metalness: 0.3 })
+    );
+    backPanel.position.set(0, 0, -BUILDING_D * 0.42);
+    backPanel.receiveShadow = true;
+    floors[TMD_FLOOR].add(backPanel);
+
+    // thin light strip on the back panel for subtle internal lighting
+    const lightStrip = new THREE.Mesh(
+      new THREE.BoxGeometry(BUILDING_W * 0.6, 0.04, 0.02),
+      new THREE.MeshBasicMaterial({ color: 0xffcd66 })
+    );
+    lightStrip.position.set(0, FLOOR_H * 0.4, -BUILDING_D * 0.42 + 0.07);
+    floors[TMD_FLOOR].add(lightStrip);
+
+    // floor plate inside the TMD room
+    const plate = new THREE.Mesh(
+      new THREE.BoxGeometry(BUILDING_W * 0.82, 0.06, BUILDING_D * 0.7),
+      new THREE.MeshStandardMaterial({ color: 0x2c333f, roughness: 0.9 })
+    );
+    plate.position.set(0, -FLOOR_H * 0.48, -BUILDING_D * 0.08);
+    plate.receiveShadow = true;
+    floors[TMD_FLOOR].add(plate);
 
     // pivot mount: a small bracket on the ceiling of the TMD floor
     const mount = new THREE.Mesh(
@@ -641,25 +717,42 @@ for (let i = 0; i < 5; i++) {
 }
 
 // trees scattered along the sides of the scene (not between buildings)
+// shared leaf materials — slight variation in tone so foliage looks organic
+const LEAF_MATS = [
+  new THREE.MeshStandardMaterial({ color: 0x3e7a3a, roughness: 0.85, flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0x4f8c44, roughness: 0.85, flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0x356b31, roughness: 0.9,  flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0x6ba552, roughness: 0.85, flatShading: true }),
+  new THREE.MeshStandardMaterial({ color: 0x2f6a32, roughness: 0.9,  flatShading: true }),
+];
+const LEAF_GEO = new THREE.IcosahedronGeometry(1, 1);  // low-poly faceted sphere
+
 function addTree(x, z, scale = 1) {
+  // trunk
   const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.15, 0.22, 1.8 * scale, 8),
-    new THREE.MeshStandardMaterial({ color: 0x5a3a1c, roughness: 0.95 })
+    new THREE.CylinderGeometry(0.15, 0.24, 1.8 * scale, 8),
+    new THREE.MeshStandardMaterial({ color: 0x5a3a1c, roughness: 0.95, flatShading: true })
   );
   trunk.position.set(x, 0.9 * scale, z);
   trunk.castShadow = true;
   scene.add(trunk);
 
-  const leafMat = new THREE.MeshStandardMaterial({ color: 0x3e7a3a, roughness: 0.8 });
-  for (let i = 0; i < 3; i++) {
-    const blob = new THREE.Mesh(_sphereGeo, leafMat);
-    const s = (0.8 + Math.random() * 0.5) * scale;
-    blob.scale.set(s, s * 0.9, s);
-    blob.position.set(
-      x + (Math.random() - 0.5) * 0.5,
-      (1.8 + i * 0.4) * scale,
-      z + (Math.random() - 0.5) * 0.5
-    );
+  // leaf canopy — cauliflower of many small faceted blobs with color variation
+  const canopyY = 1.9 * scale;
+  const puffCount = 8 + Math.floor(Math.random() * 6);
+  for (let i = 0; i < puffCount; i++) {
+    const mat = LEAF_MATS[Math.floor(Math.random() * LEAF_MATS.length)];
+    const blob = new THREE.Mesh(LEAF_GEO, mat);
+    // distribute in an oblate spheroid around canopy center
+    const theta = Math.random() * Math.PI * 2;
+    const r = (0.3 + Math.random() * 0.7) * scale;
+    const vy = (Math.random() - 0.3) * 0.9 * scale;
+    const rx = Math.cos(theta) * r;
+    const rz = Math.sin(theta) * r;
+    const s = (0.35 + Math.random() * 0.55) * scale;
+    blob.position.set(x + rx, canopyY + vy, z + rz);
+    blob.scale.set(s, s * (0.8 + Math.random() * 0.4), s);
+    blob.rotation.set(Math.random() * 0.6, Math.random() * Math.PI * 2, Math.random() * 0.6);
     blob.castShadow = true;
     scene.add(blob);
   }
