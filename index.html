@@ -495,17 +495,36 @@ function makeBuilding(x, facadeTex, withTMD) {
   // BoxGeometry face order: [+x, -x, +y, -y, +z, -z] = right, left, top, bottom, front, back
   const floorMats = [wallMat, wallMat, slabMat, slabMat, wallMat, wallMat];
 
+  // translucent glass material for the "TMD floor" (one below top) on the right tower
+  const glassMat = new THREE.MeshPhysicalMaterial({
+    color: 0xaedcf2,
+    transparent: true,
+    opacity: 0.25,
+    roughness: 0.05,
+    metalness: 0.0,
+    transmission: 0.85,
+    thickness: 0.3,
+    envMapIntensity: 1.0,
+    side: THREE.DoubleSide,
+  });
+  const glassFloorMats = [glassMat, glassMat, slabMat, slabMat, glassMat, glassMat];
+
+  const TMD_FLOOR = FLOORS - 2;  // second from top
+
   for (let i = 0; i < FLOORS; i++) {
+    // right tower: make the TMD floor translucent so the pendulum is visible
+    const useGlass = withTMD && i === TMD_FLOOR;
     const f = new THREE.Mesh(
       new THREE.BoxGeometry(BUILDING_W, FLOOR_H, BUILDING_D),
-      floorMats
+      useGlass ? glassFloorMats : floorMats
     );
-    f.castShadow = f.receiveShadow = true;
+    f.castShadow = useGlass ? false : true;
+    f.receiveShadow = !useGlass;
     floors.push(f);
     group.add(f);
 
-    // thin dark slab between floors (structural line)
-    if (i < FLOORS - 1) {
+    // thin dark slab between floors (structural line) — skip around the glass floor so it reads as one open volume
+    if (i < FLOORS - 1 && !(withTMD && (i === TMD_FLOOR || i === TMD_FLOOR - 1))) {
       const band = new THREE.Mesh(
         new THREE.BoxGeometry(BUILDING_W + 0.04, 0.06, BUILDING_D + 0.04),
         new THREE.MeshStandardMaterial({ color: 0x0b0f1e, roughness: 0.9 })
@@ -515,7 +534,7 @@ function makeBuilding(x, facadeTex, withTMD) {
     }
   }
 
-  // crown / roof cap
+  // identical crown / roof cap on both towers — keeps overall height the same
   const crown = new THREE.Mesh(
     new THREE.BoxGeometry(BUILDING_W + 0.3, 0.4, BUILDING_D + 0.3),
     new THREE.MeshStandardMaterial({ color: 0x141a2e, roughness: 0.8 })
@@ -524,52 +543,41 @@ function makeBuilding(x, facadeTex, withTMD) {
   crown.castShadow = true;
   floors[FLOORS - 1].add(crown);
 
-  // antenna spire (only on the no-TMD building for visual distinction)
+  // TMD: heavy sphere hanging from a pivot inside the translucent floor (FLOORS-2)
   let tmd = null, tmdPivot = null, tmdRod = null;
-  if (!withTMD) {
-    const spire = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.08, 2.2, 8),
-      new THREE.MeshStandardMaterial({ color: 0x889, metalness: 0.6, roughness: 0.3 })
-    );
-    spire.position.y = FLOOR_H * 0.5 + 0.4 + 1.1;
-    spire.castShadow = true;
-    floors[FLOORS - 1].add(spire);
-  }
-
-  // TMD: a heavy sphere hanging from a pivot at top
   if (withTMD) {
-    // glass enclosure for the damper (visual)
-    const enclosure = new THREE.Mesh(
-      new THREE.BoxGeometry(BUILDING_W - 0.2, 2.2, BUILDING_D - 0.2),
-      new THREE.MeshPhysicalMaterial({
-        color: 0x88ccff, transparent: true, opacity: 0.18,
-        roughness: 0.1, metalness: 0.0, transmission: 0.7
-      })
-    );
-    enclosure.position.y = FLOOR_H * 0.5 + 0.4 + 1.1;
-    floors[FLOORS - 1].add(enclosure);
+    const ROD_LEN = 0.7;
+    const BALL_R  = 0.3;
 
-    // pivot point just under the roof cap
+    // pivot mount: a small bracket on the ceiling of the TMD floor
+    const mount = new THREE.Mesh(
+      new THREE.BoxGeometry(0.35, 0.08, 0.35),
+      new THREE.MeshStandardMaterial({ color: 0x333842, metalness: 0.5, roughness: 0.5 })
+    );
+    mount.position.y = FLOOR_H * 0.5 - 0.04;
+    floors[TMD_FLOOR].add(mount);
+
+    // pendulum pivot point
     tmdPivot = new THREE.Group();
-    floors[FLOORS - 1].add(tmdPivot);
-    tmdPivot.position.y = FLOOR_H * 0.5 + 0.4 + 2.0;
+    floors[TMD_FLOOR].add(tmdPivot);
+    tmdPivot.position.y = FLOOR_H * 0.5 - 0.08;
 
     tmdRod = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.04, 1.6, 10),
+      new THREE.CylinderGeometry(0.03, 0.03, ROD_LEN, 10),
       new THREE.MeshStandardMaterial({ color: 0x99a3b8, metalness: 0.7, roughness: 0.3 })
     );
-    tmdRod.position.y = -0.8;
+    tmdRod.position.y = -ROD_LEN / 2;
     tmdPivot.add(tmdRod);
 
     tmd = new THREE.Mesh(
-      new THREE.SphereGeometry(0.55, 28, 20),
+      new THREE.SphereGeometry(BALL_R, 28, 20),
       new THREE.MeshStandardMaterial({
         color: 0xffc857, metalness: 0.75, roughness: 0.25,
         emissive: 0x442200, emissiveIntensity: 0.2
       })
     );
     tmd.castShadow = true;
-    tmd.position.y = -1.6;
+    tmd.position.y = -ROD_LEN - BALL_R;
     tmdPivot.add(tmd);
   }
 
@@ -1327,11 +1335,10 @@ function stepPhysics(dt) {
   state.tV += tAcc * dt;
   state.tX += state.tV * dt;
 
-  // soft-limit the TMD's swing so it stays near the center of its enclosure.
-  // Higher damper mass needs more swing room to absorb energy effectively, so
-  // the limits scale with mu (stays centered for tiny dampers, swings freely for big ones).
-  const SOFT_LIMIT = 0.18 + state.mu * 1.4;   // mu=0.01 → 0.194, mu=0.2 → 0.46
-  const HARD_LIMIT = SOFT_LIMIT + 0.08;
+  // soft-limit the TMD's swing so the pendulum stays inside its glass floor.
+  // With the shorter rod (0.7) the displacement needs to be smaller too.
+  const SOFT_LIMIT = 0.12 + state.mu * 0.9;   // mu=0.01 → 0.13, mu=0.3 → 0.39
+  const HARD_LIMIT = SOFT_LIMIT + 0.05;
   const rel = state.tX - state.bX;
   if (Math.abs(rel) > SOFT_LIMIT) {
     const sign = Math.sign(rel);
@@ -1375,7 +1382,7 @@ function applySway(b, topDisp) {
 function applyTMD(b, tmdDisp) {
   if (!b.tmdPivot) return;
   // pendulum angle from horizontal displacement (length ~1.8)
-  const angle = Math.atan2(tmdDisp, 1.8);
+  const angle = Math.atan2(tmdDisp, 0.7);
   b.tmdPivot.rotation.z = angle;
 }
 
