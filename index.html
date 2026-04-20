@@ -58,8 +58,8 @@
   </div>
   <div class="row">
     <label>Damper mass</label>
-    <input id="tmdMass" type="range" min="0.01" max="0.2" step="0.005" value="0.05" />
-    <span id="tmdMassV" class="val">0.05</span>
+    <input id="tmdMass" type="range" min="0.01" max="0.3" step="0.005" value="0.08" />
+    <span id="tmdMassV" class="val">0.08</span>
   </div>
 
   <div style="margin-top:10px;">
@@ -626,6 +626,25 @@ for (let k = 0; k < 30; k++) {
     addTree(x, z, 0.8 + Math.random() * 0.5);
   }
 }
+// deep mid-ground tree lines (between heroes and background buildings)
+for (let k = 0; k < 45; k++) {
+  const x = (Math.random() - 0.5) * 110;
+  const z = -18 - Math.random() * 20;
+  if (treeClear(x, z)) addTree(x, z, 0.85 + Math.random() * 0.5);
+}
+// far park strip on the sides running into the distance
+for (let k = 0; k < 36; k++) {
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const x = side * (22 + Math.random() * 32);
+  const z = -Math.random() * 90;
+  if (treeClear(x, z)) addTree(x, z, 0.85 + Math.random() * 0.6);
+}
+// a sparse tree row at the very back to soften the building line
+for (let k = 0; k < 24; k++) {
+  const x = (Math.random() - 0.5) * 160;
+  const z = -55 - Math.random() * 25;
+  addTree(x, z, 0.9 + Math.random() * 0.6);
+}
 
 // ---------- static cartoon background buildings (non-animating) ----------
 function makeBgBuildingTexture(palette) {
@@ -703,15 +722,52 @@ const bgRow = [
 ];
 bgRow.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i));
 
-// a second deeper row for more depth variety
+// deeper row for more depth variety
 const bgRow2 = [
-  { x: -38, z: -45, w: 6, h: 28, d: 6 },
+  { x: -48, z: -45, w: 6, h: 28, d: 6 },
+  { x: -36, z: -46, w: 5, h: 22, d: 5 },
   { x: -20, z: -48, w: 8, h: 36, d: 8 },
-  { x:   0, z: -46, w: 7, h: 30, d: 7 },
-  { x:  20, z: -48, w: 8, h: 38, d: 8 },
-  { x:  38, z: -45, w: 6, h: 26, d: 6 },
+  { x:  -8, z: -47, w: 6, h: 26, d: 6 },
+  { x:   4, z: -46, w: 7, h: 30, d: 7 },
+  { x:  18, z: -48, w: 8, h: 38, d: 8 },
+  { x:  32, z: -46, w: 5, h: 24, d: 5 },
+  { x:  48, z: -45, w: 6, h: 26, d: 6 },
 ];
 bgRow2.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i + 3));
+
+// third row — deeper downtown silhouette, taller towers
+const bgRow3 = [
+  { x: -60, z: -62, w: 7, h: 34, d: 7 },
+  { x: -42, z: -65, w: 9, h: 48, d: 9 },
+  { x: -24, z: -64, w: 8, h: 42, d: 8 },
+  { x:  -6, z: -66, w: 10, h: 52, d: 10 },
+  { x:  12, z: -64, w: 9, h: 46, d: 9 },
+  { x:  30, z: -65, w: 8, h: 40, d: 8 },
+  { x:  48, z: -63, w: 9, h: 44, d: 9 },
+  { x:  62, z: -62, w: 7, h: 32, d: 7 },
+];
+bgRow3.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i + 1));
+
+// fourth row — far distance, shorter and smaller
+const bgRow4 = [
+  { x: -75, z: -85, w: 8, h: 26, d: 8 },
+  { x: -55, z: -88, w: 9, h: 34, d: 9 },
+  { x: -30, z: -86, w: 10, h: 40, d: 10 },
+  { x:   0, z: -90, w: 12, h: 46, d: 12 },
+  { x:  30, z: -86, w: 10, h: 38, d: 10 },
+  { x:  55, z: -88, w: 9, h: 32, d: 9 },
+  { x:  75, z: -85, w: 8, h: 24, d: 8 },
+];
+bgRow4.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i + 4));
+
+// a distant skyline ring at the horizon (smaller buildings far away)
+for (let i = -10; i <= 10; i++) {
+  const x = i * 12 + (Math.random() - 0.5) * 4;
+  const z = -115 - Math.random() * 25;
+  const h = 18 + Math.random() * 30;
+  const w = 6 + Math.random() * 4;
+  addBgBuilding(x, z, w, h, w, Math.floor(Math.random() * bgPalettes.length));
+}
 
 // smaller buildings off to the far sides (behind the heroes, not blocking them)
 const sides = [
@@ -780,6 +836,25 @@ for (let k = 0; k < 8; k++) {
   const z = -10 + Math.random() * 22;
   tryAddPerson(x, z);
 }
+// more people scattered across the mid-ground and distance
+for (let k = 0; k < 40; k++) {
+  const x = (Math.random() - 0.5) * 80;
+  const z = -25 + Math.random() * 45;
+  tryAddPerson(x, z);
+}
+// deeper crowd in the park rows behind the road
+for (let k = 0; k < 22; k++) {
+  const x = (Math.random() - 0.5) * 60;
+  const z = 14 + Math.random() * 12;
+  tryAddPerson(x, z);
+}
+// groups clustered on the far sides
+for (let k = 0; k < 18; k++) {
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const x = side * (16 + Math.random() * 22);
+  const z = -18 + Math.random() * 30;
+  tryAddPerson(x, z);
+}
 
 // labels (sprites)
 function makeLabel(text, color) {
@@ -827,7 +902,7 @@ function tmdParams(mu) {
 const state = {
   // ground
   gx: 0, quakeT: 0, quakeActive: false, quakeDur: 0,
-  amp: 0.09, freq: 1.0, mu: 0.05,
+  amp: 0.09, freq: 1.0, mu: 0.08,
   // building A: top displacement x, velocity v (modal)
   aX: 0, aV: 0,
   // building B: top displacement & velocity
@@ -1147,10 +1222,11 @@ function stepPhysics(dt) {
   state.tV += tAcc * dt;
   state.tX += state.tV * dt;
 
-  // soft-limit the TMD's swing so it stays near the center of its enclosure
-  // rather than banging into the walls. Damped spring pulls it back once past a soft edge.
-  const SOFT_LIMIT = 0.28;
-  const HARD_LIMIT = 0.38;
+  // soft-limit the TMD's swing so it stays near the center of its enclosure.
+  // Higher damper mass needs more swing room to absorb energy effectively, so
+  // the limits scale with mu (stays centered for tiny dampers, swings freely for big ones).
+  const SOFT_LIMIT = 0.18 + state.mu * 1.4;   // mu=0.01 → 0.194, mu=0.2 → 0.46
+  const HARD_LIMIT = SOFT_LIMIT + 0.08;
   const rel = state.tX - state.bX;
   if (Math.abs(rel) > SOFT_LIMIT) {
     const sign = Math.sign(rel);
