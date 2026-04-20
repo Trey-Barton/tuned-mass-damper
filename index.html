@@ -285,54 +285,87 @@ function makeBackdropTexture() {
 scene.background = new THREE.Color(0x3fb0f4);
 
 // ---------- puffy cartoon clouds ----------
-function makeCloudTexture() {
+// Build several distinct cloud silhouettes with hard-ish alpha cutoffs so
+// sprite edges don't bleed rainbow fringes against each other.
+function makeCloudTexture(seed) {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const ctx = c.getContext('2d');
-  // cauliflower of white puffs
-  const puff = (cx, cy, r) => {
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    g.addColorStop(0, 'rgba(255,255,255,0.95)');
-    g.addColorStop(0.55, 'rgba(255,255,255,0.75)');
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = g;
-    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
-  };
-  puff(128, 128, 85);
-  puff(85, 135, 55);
-  puff(170, 130, 60);
-  puff(110, 105, 50);
-  puff(155, 110, 52);
-  puff(140, 150, 55);
-  // soft under-shadow
-  const sg = ctx.createRadialGradient(128, 165, 5, 128, 165, 80);
-  sg.addColorStop(0, 'rgba(190,210,225,0.35)');
-  sg.addColorStop(1, 'rgba(190,210,225,0)');
-  ctx.fillStyle = sg;
-  ctx.fillRect(48, 120, 160, 80);
+  ctx.clearRect(0, 0, 256, 256);
+
+  // deterministic rand from seed
+  const R = (() => {
+    let s = seed * 9301 + 49297;
+    return () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  })();
+
+  // cluster of hard white circles — cartoon-cloud silhouette
+  const puffs = 5 + Math.floor(R() * 5);
+  const cy = 138;
+  for (let i = 0; i < puffs; i++) {
+    const cx = 60 + (i / (puffs - 1)) * 136 + (R() - 0.5) * 16;
+    const dy = cy - (i === Math.floor(puffs / 2) ? 20 : 0) + (R() - 0.5) * 18;
+    const r  = 34 + R() * 28;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(cx, dy, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // flatten the bottom: draw a white bar so base is level
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(50, cy, 160, 14);
+
+  // subtle grey underbelly shading (solid color, not a soft gradient — no fringe)
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.fillStyle = 'rgba(200, 214, 228, 0.45)';
+  ctx.fillRect(0, cy + 6, 256, 20);
+  ctx.globalCompositeOperation = 'source-over';
+
+  // slight top highlight
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillRect(0, 95, 256, 14);
+  ctx.globalCompositeOperation = 'source-over';
+
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
   return tex;
 }
-const CLOUD_TEX = makeCloudTexture();
-function addCloud(x, y, z, scale) {
+const CLOUD_TEXS = Array.from({ length: 6 }, (_, i) => makeCloudTexture(i + 11));
+
+function addCloud(x, y, z, scale, variant) {
+  const tex = CLOUD_TEXS[variant % CLOUD_TEXS.length];
   const mat = new THREE.SpriteMaterial({
-    map: CLOUD_TEX, transparent: true, depthWrite: false, fog: false, toneMapped: false,
+    map: tex,
+    transparent: true,
+    depthWrite: false,
+    fog: false,
+    toneMapped: false,
+    alphaTest: 0.5,        // kill the soft edges that cause rainbow fringing
   });
   const s = new THREE.Sprite(mat);
   s.position.set(x, y, z);
-  s.scale.set(scale, scale * 0.55, 1);
+  s.scale.set(scale, scale * 0.45, 1);
+  s.renderOrder = -1;       // render before other transparent stuff
   scene.add(s);
 }
-// scatter clouds across the sky, mostly behind the scene and up high
+
+// scatter clouds across the sky with varied size, placement, and variant
 const cloudPlaces = [
-  [-80, 48, -140, 40], [-35, 55, -150, 46], [  5, 50, -160, 52], [ 45, 52, -145, 44],
-  [ 85, 46, -155, 38], [-120, 58, -170, 42], [110, 60, -165, 46],
-  [-55, 70, -180, 55], [ 30, 68, -185, 52], [ 90, 72, -190, 48],
-  [-25, 42, -110,  32], [ 60, 44, -120,  30],
-  [-90, 75, -210, 60], [ 70, 80, -220, 58], [ 0, 90, -240, 70],
+  // [x, y, z, scale, variantIdx]
+  [-90, 44, -140, 34, 0], [-40, 52, -150, 42, 1], [ 10, 48, -160, 48, 2],
+  [ 50, 50, -145, 38, 3], [ 95, 46, -155, 34, 4], [-130, 58, -170, 40, 5],
+  [120, 60, -165, 44, 0],
+  [-60, 68, -180, 50, 1], [ 35, 66, -185, 46, 2], [100, 70, -190, 42, 3],
+  [-25, 42, -110, 28, 4], [ 65, 44, -120, 26, 5],
+  [-100, 78, -210, 56, 0], [ 75, 82, -220, 54, 1], [  0, 92, -240, 64, 2],
+  [-170, 66, -200, 46, 3], [160, 72, -205, 48, 4],
+  [-55, 88, -260, 60, 5], [ 45, 86, -260, 58, 0],
 ];
-cloudPlaces.forEach(([x, y, z, s]) => addCloud(x, y, z, s));
+cloudPlaces.forEach(([x, y, z, s, v]) => addCloud(x, y, z, s, v));
 
 // ---------- lights (flatter, less PBR for cartoon feel) ----------
 scene.add(new THREE.HemisphereLight(0xffffff, 0x9ab5a0, 0.85));
