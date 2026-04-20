@@ -581,17 +581,138 @@ function addTree(x, z, scale = 1) {
     scene.add(blob);
   }
 }
-// rows of trees flanking the scene
-for (let i = -4; i <= 4; i++) {
+// ---------- trees scattered across the scene ----------
+// Hero buildings occupy roughly |x-(-8)| < 3 and |x-8| < 3 at z ≈ 0; keep those zones clear.
+function treeClear(x, z) {
+  if (z > -2 && z < 8 && (Math.abs(x + 8) < 3 || Math.abs(x - 8) < 3)) return false;
+  // keep the crosswalk / road lanes clear
+  if (z > 4 && z < 7 && Math.abs(x) < 3) return false;
+  return true;
+}
+// sidewalk / foreground rows flanking the heroes
+for (let i = -5; i <= 5; i++) {
   if (Math.abs(i) < 1) continue;
-  const jitter = () => (Math.random() - 0.5) * 0.6;
-  addTree(-14 + jitter(), i * 3.5 + jitter(), 0.9 + Math.random() * 0.3);
-  addTree(14 + jitter(), i * 3.5 + jitter(), 0.9 + Math.random() * 0.3);
+  const jitter = () => (Math.random() - 0.5) * 0.7;
+  const lx = -14 + jitter(), lz = i * 3.2 + jitter();
+  const rx = 14 + jitter(),  rz = i * 3.2 + jitter();
+  if (treeClear(lx, lz)) addTree(lx, lz, 0.85 + Math.random() * 0.35);
+  if (treeClear(rx, rz)) addTree(rx, rz, 0.85 + Math.random() * 0.35);
 }
-// back row between hero buildings (on the far side of the road)
-for (let i = -2; i <= 2; i++) {
-  addTree(i * 3.5, 10 + (Math.random() - 0.5) * 0.8, 0.9 + Math.random() * 0.3);
+// back row between hero buildings (far side of road)
+for (let i = -3; i <= 3; i++) {
+  const x = i * 3.2 + (Math.random() - 0.5) * 0.6;
+  const z = 10 + (Math.random() - 0.5) * 0.8;
+  if (treeClear(x, z)) addTree(x, z, 0.85 + Math.random() * 0.35);
 }
+// deeper park rows behind the buildings
+for (let row = 0; row < 3; row++) {
+  const z = 18 + row * 5 + (Math.random() - 0.5);
+  for (let i = -8; i <= 8; i++) {
+    const x = i * 3 + (Math.random() - 0.5) * 0.9;
+    if (treeClear(x, z)) addTree(x, z, 0.9 + Math.random() * 0.5);
+  }
+}
+// foreground trees (in front of the road, toward the camera)
+for (let i = -7; i <= 7; i++) {
+  const x = i * 3.4 + (Math.random() - 0.5) * 0.8;
+  const z = -18 + (Math.random() - 0.5) * 1.2;
+  if (treeClear(x, z)) addTree(x, z, 0.85 + Math.random() * 0.4);
+}
+// scattered fill
+for (let k = 0; k < 30; k++) {
+  const x = (Math.random() - 0.5) * 70;
+  const z = -25 + Math.random() * 60;
+  if (treeClear(x, z) && Math.abs(z) > 3 && Math.abs(z - 0) > 3) {
+    addTree(x, z, 0.8 + Math.random() * 0.5);
+  }
+}
+
+// ---------- static cartoon background buildings (non-animating) ----------
+function makeBgBuildingTexture(palette) {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = palette.body;
+  ctx.fillRect(0, 0, 256, 256);
+  // darker right edge for subtle shading
+  ctx.fillStyle = 'rgba(0,0,0,0.14)';
+  ctx.fillRect(200, 0, 56, 256);
+  // windows
+  const cols = palette.type === 'glass' ? 4 : 6;
+  const rows = 10;
+  const cellW = (256 - 20) / cols;
+  const cellH = (256 - 24) / rows;
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      const lit = Math.random() < (palette.type === 'glass' ? 0.25 : 0.18);
+      ctx.fillStyle = lit ? '#ffe7a6' : palette.glass;
+      const x = 10 + col * cellW;
+      const y = 12 + r * cellH;
+      ctx.fillRect(x + 2, y + 2, cellW - 6, cellH - 7);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+const bgPalettes = [
+  { body: '#3a78a8', glass: '#62a4d0', type: 'glass' },
+  { body: '#b17a4f', glass: '#d1a27e', type: 'brick' },
+  { body: '#dfd8c7', glass: '#bab2a0', type: 'cream' },
+  { body: '#2b557e', glass: '#4886b2', type: 'glass' },
+  { body: '#98735a', glass: '#c09a82', type: 'brick' },
+  { body: '#c8c4b6', glass: '#9d9788', type: 'cream' },
+];
+
+function addBgBuilding(x, z, w, h, d, paletteIdx) {
+  const p = bgPalettes[paletteIdx % bgPalettes.length];
+  const tex = makeBgBuildingTexture(p);
+  tex.repeat.set(Math.max(1, Math.round(w / 4)), Math.max(1, Math.round(h / 5)));
+  // material array: windowed sides, solid top/bottom
+  const wallMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0.05 });
+  const topMat  = new THREE.MeshStandardMaterial({ color: p.body, roughness: 0.9 });
+  const mats = [wallMat, wallMat, topMat, topMat, wallMat, wallMat];
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats);
+  m.position.set(x, h / 2, z);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  scene.add(m);
+  // flat dark roof trim
+  const trim = new THREE.Mesh(
+    new THREE.BoxGeometry(w * 1.04, 0.3, d * 1.04),
+    new THREE.MeshStandardMaterial({ color: 0x2c3040, roughness: 0.9 })
+  );
+  trim.position.set(x, h + 0.15, z);
+  scene.add(trim);
+}
+
+// static skyline row behind the heroes (far side of the road)
+const bgRow = [
+  { x: -42, z: 28, w: 7, h: 22, d: 7 },
+  { x: -32, z: 30, w: 5, h: 16, d: 5 },
+  { x: -24, z: 26, w: 6, h: 28, d: 6 },
+  { x: -16, z: 29, w: 5, h: 19, d: 5 },
+  { x:  -4, z: 27, w: 6, h: 24, d: 6 },
+  { x:   4, z: 29, w: 5, h: 18, d: 5 },
+  { x:  16, z: 26, w: 6, h: 26, d: 6 },
+  { x:  24, z: 28, w: 7, h: 32, d: 7 },
+  { x:  34, z: 30, w: 5, h: 17, d: 5 },
+  { x:  44, z: 27, w: 6, h: 22, d: 6 },
+];
+bgRow.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i));
+
+// a few smaller buildings off to the sides to fill the flanks
+const sides = [
+  { x: -26, z:  -6, w: 5, h: 12, d: 5 },
+  { x: -22, z:   4, w: 4, h: 9,  d: 4 },
+  { x:  22, z:   4, w: 4, h: 10, d: 4 },
+  { x:  28, z:  -6, w: 5, h: 14, d: 5 },
+  { x: -30, z:  14, w: 4, h: 11, d: 4 },
+  { x:  30, z:  14, w: 4, h: 13, d: 4 },
+];
+sides.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i + 2));
 
 // simple people: colored capsules with a small head sphere
 function addPerson(x, z, color) {
@@ -614,17 +735,43 @@ function addPerson(x, z, color) {
   head.castShadow = true;
   scene.add(head);
 }
-const shirts = [0xd65a5a, 0x4a8cd6, 0xd6a94a, 0x6bc28b, 0x9b6bd6, 0xd66b9b];
-// a small crowd near each building + some on the crosswalk
-addPerson(-6, 3, shirts[0]);
-addPerson(-9, 3.5, shirts[1]);
-addPerson(-7, 4.2, shirts[2]);
-addPerson(7, 3.2, shirts[3]);
-addPerson(9, 4, shirts[4]);
-addPerson(5.5, 3.8, shirts[5]);
-addPerson(-1, 6, shirts[1]);
-addPerson(1.5, 6.3, shirts[2]);
-addPerson(-3, 6.8, shirts[3]);
+const shirts = [0xd65a5a, 0x4a8cd6, 0xd6a94a, 0x6bc28b, 0x9b6bd6, 0xd66b9b, 0xff8a66, 0x6fd1c4];
+// helper: place a person if the spot isn't in a building/road lane
+function tryAddPerson(x, z) {
+  // keep off the tower footprints
+  if (z > -2 && z < 8 && (Math.abs(x + 8) < 2 || Math.abs(x - 8) < 2)) return;
+  // keep off the lane stripes
+  if (z > -4 && z < 4 && Math.abs(Math.abs(x) - 14) < 0.6) return;
+  addPerson(x, z, shirts[Math.floor(Math.random() * shirts.length)]);
+}
+
+// foreground crowd near the sidewalks
+const frontPlaces = [
+  [-6, 3], [-9, 3.5], [-7, 4.2], [-5.5, 2.8], [-10, 2.6],
+  [7, 3.2], [9, 4], [5.5, 3.8], [10, 2.9], [6.5, 2.5],
+  [-1, 6], [1.5, 6.3], [-3, 6.8], [0, 7.5], [2.5, 7.2],
+];
+frontPlaces.forEach(([x, z]) => tryAddPerson(x, z));
+
+// people walking farther back (past the crosswalk)
+for (let k = 0; k < 14; k++) {
+  const x = (Math.random() - 0.5) * 40;
+  const z = 9 + Math.random() * 13;
+  tryAddPerson(x, z);
+}
+// foreground pedestrians (toward the camera, in front of the road)
+for (let k = 0; k < 10; k++) {
+  const x = (Math.random() - 0.5) * 36;
+  const z = -14 + Math.random() * 6;
+  tryAddPerson(x, z);
+}
+// side groups on the flanks
+for (let k = 0; k < 8; k++) {
+  const side = Math.random() < 0.5 ? -1 : 1;
+  const x = side * (18 + Math.random() * 12);
+  const z = -10 + Math.random() * 22;
+  tryAddPerson(x, z);
+}
 
 // labels (sprites)
 function makeLabel(text, color) {
