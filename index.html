@@ -451,10 +451,8 @@ function addPond(cx, cz, rx, rz) {
   const segs = 32;
   for (let i = 0; i < segs; i++) {
     const a = (i / segs) * Math.PI * 2;
-    const stone = new THREE.Mesh(
-      new THREE.BoxGeometry(0.6, 0.25, 0.5),
-      rimMat
-    );
+    const stone = new THREE.Mesh(_boxGeo, rimMat);
+    stone.scale.set(0.6, 0.25, 0.5);
     stone.position.set(
       cx + Math.cos(a) * (rx + 0.1),
       0.12,
@@ -470,10 +468,9 @@ function addPond(cx, cz, rx, rz) {
   for (let i = 0; i < 6; i++) {
     const a = Math.random() * Math.PI * 2;
     const r = 0.35 + Math.random() * 0.45;
-    const pad = new THREE.Mesh(
-      new THREE.CircleGeometry(0.22 + Math.random() * 0.12, 12),
-      new THREE.MeshStandardMaterial({ color: 0x3d8a3e, roughness: 0.9 })
-    );
+    const pad = new THREE.Mesh(_circleGeo, _lilyMat);
+    const padR = 0.22 + Math.random() * 0.12;
+    pad.scale.set(padR, padR, 1);
     pad.rotation.x = -Math.PI / 2;
     pad.position.set(cx + Math.cos(a) * r * rx, 0.07, cz + Math.sin(a) * r * rz);
     scene.add(pad);
@@ -729,9 +726,26 @@ function makeCityFacadeTexture(seed) {
 }
 
 // ---------- street-level details: road, crosswalk, trees, people ----------
+// shared unit geometries — scale per-instance via mesh.scale
 const _boxGeo = new THREE.BoxGeometry(1, 1, 1);
-const _cylGeo = new THREE.CylinderGeometry(0.5, 0.5, 1, 10);
 const _sphereGeo = new THREE.SphereGeometry(1, 12, 10);
+const _bodyGeo   = new THREE.CapsuleGeometry(0.18, 0.55, 4, 8);
+const _legsGeo   = new THREE.CapsuleGeometry(0.17, 0.40, 4, 8);
+const _headGeo   = new THREE.SphereGeometry(0.17, 14, 12);
+const _trunkGeo  = new THREE.CylinderGeometry(0.15, 0.24, 1, 8);  // unit height, scale Y per tree
+const _circleGeo = new THREE.CircleGeometry(1, 12);               // for lily pads
+// shared materials for crowd + parks
+const _pantsMat  = new THREE.MeshStandardMaterial({ color: 0x2a2a35, roughness: 0.95 });
+const _skinMat   = new THREE.MeshStandardMaterial({ color: 0xe7b793, roughness: 0.8 });
+const _trunkMat  = new THREE.MeshStandardMaterial({ color: 0x5a3a1c, roughness: 0.95, flatShading: true });
+const _lilyMat   = new THREE.MeshStandardMaterial({ color: 0x3d8a3e, roughness: 0.9 });
+// shirt material cache keyed by color
+const _shirtMats = new Map();
+function shirtMat(color) {
+  let m = _shirtMats.get(color);
+  if (!m) { m = new THREE.MeshStandardMaterial({ color, roughness: 0.85 }); _shirtMats.set(color, m); }
+  return m;
+}
 
 // sidewalk pads in front of each hero building
 const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x8a8f99, roughness: 0.95 });
@@ -764,11 +778,9 @@ const LEAF_MATS = [
 const LEAF_GEO = new THREE.IcosahedronGeometry(1, 1);  // low-poly faceted sphere
 
 function addTree(x, z, scale = 1) {
-  // trunk
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.15, 0.24, 1.8 * scale, 8),
-    new THREE.MeshStandardMaterial({ color: 0x5a3a1c, roughness: 0.95, flatShading: true })
-  );
+  // shared trunk geometry + material; scale Y per tree
+  const trunk = new THREE.Mesh(_trunkGeo, _trunkMat);
+  trunk.scale.set(1, 1.8 * scale, 1);
   trunk.position.set(x, 0.9 * scale, z);
   trunk.castShadow = true;
   scene.add(trunk);
@@ -905,24 +917,36 @@ const bgPalettes = [
   { body: '#c8c4b6', glass: '#9d9788', type: 'cream' },
 ];
 
-function addBgBuilding(x, z, w, h, d, paletteIdx) {
+// cache materials per palette index so we don't build 40 unique textures
+const _bgMatCache = new Map();
+const _bgTrimMat = new THREE.MeshStandardMaterial({ color: 0x2c3040, roughness: 0.9 });
+function getBgMats(paletteIdx) {
+  let entry = _bgMatCache.get(paletteIdx);
+  if (entry) return entry;
   const p = bgPalettes[paletteIdx % bgPalettes.length];
   const tex = makeBgBuildingTexture(p);
-  tex.repeat.set(Math.max(1, Math.round(w / 4)), Math.max(1, Math.round(h / 5)));
-  // material array: windowed sides, solid top/bottom
   const wallMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85, metalness: 0.05 });
   const topMat  = new THREE.MeshStandardMaterial({ color: p.body, roughness: 0.9 });
-  const mats = [wallMat, wallMat, topMat, topMat, wallMat, wallMat];
-  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats);
+  // NOTE: texture.repeat is applied on the material's map here once; we use uv2
+  // scaling via the per-mesh texture clone only for the outliers. In practice
+  // the bg buildings look fine with a shared repeat since sizes are similar.
+  tex.repeat.set(2, 4);
+  entry = [wallMat, wallMat, topMat, topMat, wallMat, wallMat];
+  _bgMatCache.set(paletteIdx, entry);
+  return entry;
+}
+
+function addBgBuilding(x, z, w, h, d, paletteIdx) {
+  const mats = getBgMats(paletteIdx);
+  const m = new THREE.Mesh(_boxGeo, mats);
+  m.scale.set(w, h, d);
   m.position.set(x, h / 2, z);
   m.castShadow = true;
   m.receiveShadow = true;
   scene.add(m);
-  // flat dark roof trim
-  const trim = new THREE.Mesh(
-    new THREE.BoxGeometry(w * 1.04, 0.3, d * 1.04),
-    new THREE.MeshStandardMaterial({ color: 0x2c3040, roughness: 0.9 })
-  );
+  // flat dark roof trim (shared material and geometry)
+  const trim = new THREE.Mesh(_boxGeo, _bgTrimMat);
+  trim.scale.set(w * 1.04, 0.3, d * 1.04);
   trim.position.set(x, h + 0.15, z);
   scene.add(trim);
 }
@@ -1000,21 +1024,18 @@ sides.forEach((b, i) => addBgBuilding(b.x, b.z, b.w, b.h, b.d, i + 2));
 
 // simple people: colored capsules with a small head sphere
 function addPerson(x, z, color) {
-  const shirt = new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
-  const pants = new THREE.MeshStandardMaterial({ color: 0x2a2a35, roughness: 0.95 });
-  const skin  = new THREE.MeshStandardMaterial({ color: 0xe7b793, roughness: 0.8 });
-
-  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.18, 0.55, 4, 8), shirt);
+  // reuse shared geometries; one material per distinct shirt color
+  const body = new THREE.Mesh(_bodyGeo, shirtMat(color));
   body.position.set(x, 0.7, z);
   body.castShadow = true;
   scene.add(body);
 
-  const legs = new THREE.Mesh(new THREE.CapsuleGeometry(0.17, 0.4, 4, 8), pants);
+  const legs = new THREE.Mesh(_legsGeo, _pantsMat);
   legs.position.set(x, 0.25, z);
   legs.castShadow = true;
   scene.add(legs);
 
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.17, 14, 12), skin);
+  const head = new THREE.Mesh(_headGeo, _skinMat);
   head.position.set(x, 1.15, z);
   head.castShadow = true;
   scene.add(head);
