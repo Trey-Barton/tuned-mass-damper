@@ -284,6 +284,25 @@ function makeBackdropTexture() {
 // flat cartoon dome above (covers what's above the cylinder)
 scene.background = new THREE.Color(0x3fb0f4);
 
+// ---------- shared geometries / materials (declared early so every scene-building function can reuse them) ----------
+const _boxGeo    = new THREE.BoxGeometry(1, 1, 1);
+const _sphereGeo = new THREE.SphereGeometry(1, 12, 10);
+const _bodyGeo   = new THREE.CapsuleGeometry(0.18, 0.55, 4, 8);
+const _legsGeo   = new THREE.CapsuleGeometry(0.17, 0.40, 4, 8);
+const _headGeo   = new THREE.SphereGeometry(0.17, 14, 12);
+const _trunkGeo  = new THREE.CylinderGeometry(0.15, 0.24, 1, 8);
+const _circleGeo = new THREE.CircleGeometry(1, 12);
+const _pantsMat  = new THREE.MeshStandardMaterial({ color: 0x2a2a35, roughness: 0.95 });
+const _skinMat   = new THREE.MeshStandardMaterial({ color: 0xe7b793, roughness: 0.8 });
+const _trunkMat  = new THREE.MeshStandardMaterial({ color: 0x5a3a1c, roughness: 0.95, flatShading: true });
+const _lilyMat   = new THREE.MeshStandardMaterial({ color: 0x3d8a3e, roughness: 0.9 });
+const _shirtMats = new Map();
+function shirtMat(color) {
+  let m = _shirtMats.get(color);
+  if (!m) { m = new THREE.MeshStandardMaterial({ color, roughness: 0.85 }); _shirtMats.set(color, m); }
+  return m;
+}
+
 // ---------- puffy cartoon clouds ----------
 // Build several distinct cloud silhouettes with hard-ish alpha cutoffs so
 // sprite edges don't bleed rainbow fringes against each other.
@@ -726,26 +745,6 @@ function makeCityFacadeTexture(seed) {
 }
 
 // ---------- street-level details: road, crosswalk, trees, people ----------
-// shared unit geometries — scale per-instance via mesh.scale
-const _boxGeo = new THREE.BoxGeometry(1, 1, 1);
-const _sphereGeo = new THREE.SphereGeometry(1, 12, 10);
-const _bodyGeo   = new THREE.CapsuleGeometry(0.18, 0.55, 4, 8);
-const _legsGeo   = new THREE.CapsuleGeometry(0.17, 0.40, 4, 8);
-const _headGeo   = new THREE.SphereGeometry(0.17, 14, 12);
-const _trunkGeo  = new THREE.CylinderGeometry(0.15, 0.24, 1, 8);  // unit height, scale Y per tree
-const _circleGeo = new THREE.CircleGeometry(1, 12);               // for lily pads
-// shared materials for crowd + parks
-const _pantsMat  = new THREE.MeshStandardMaterial({ color: 0x2a2a35, roughness: 0.95 });
-const _skinMat   = new THREE.MeshStandardMaterial({ color: 0xe7b793, roughness: 0.8 });
-const _trunkMat  = new THREE.MeshStandardMaterial({ color: 0x5a3a1c, roughness: 0.95, flatShading: true });
-const _lilyMat   = new THREE.MeshStandardMaterial({ color: 0x3d8a3e, roughness: 0.9 });
-// shirt material cache keyed by color
-const _shirtMats = new Map();
-function shirtMat(color) {
-  let m = _shirtMats.get(color);
-  if (!m) { m = new THREE.MeshStandardMaterial({ color, roughness: 0.85 }); _shirtMats.set(color, m); }
-  return m;
-}
 
 // sidewalk pads in front of each hero building
 const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0x8a8f99, roughness: 0.95 });
